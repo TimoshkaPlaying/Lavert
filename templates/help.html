@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Levart Help Center</title>
+    <link rel="stylesheet" href="/static/help.css?v=20260223d">
+</head>
+<body>
+<div class="help-layout">
+    <aside class="help-sidebar">
+        <div class="logo">Levart Community</div>
+        <div class="sidebar-caption">База знаний и форум пользователей</div>
+        <button class="nav-btn active" data-tab="guide">Руководство</button>
+        <button class="nav-btn" data-tab="formatting">Форматирование</button>
+        <button class="nav-btn" data-tab="forum">Форум</button>
+        <a class="back-link" href="/">Вернуться в мессенджер</a>
+    </aside>
+    <main class="help-main">
+        <section id="tab-guide" class="tab active">
+            <h1>Как пользоваться Levart</h1>
+            <div class="card">
+                <h3>Чаты и группы</h3>
+                <p>Откройте чат в левом списке. В группе доступно управление участниками, закрепами и медиа.</p>
+            </div>
+            <div class="card">
+                <h3>Звонки</h3>
+                <p>Кнопки звонка находятся в шапке чата. Кружки и голосовые сообщения доступны рядом с полем ввода.</p>
+            </div>
+            <div class="card">
+                <h3>Истории</h3>
+                <p>Истории публикуются из блока «Истории» и автоматически исчезают через 24 часа.</p>
+            </div>
+        </section>
+
+        <section id="tab-formatting" class="tab">
+            <h1>Форматирование сообщений</h1>
+            <div class="card">
+                <p><code>**жирный**</code> → <strong>жирный</strong></p>
+                <p><code>*курсив*</code> → <em>курсив</em></p>
+                <p><code>__подчеркнутый__</code> → <u>подчеркнутый</u></p>
+                <p><code>~~зачеркнутый~~</code> → <s>зачеркнутый</s></p>
+                <p><code>`код`</code> → <code>код</code></p>
+                <p><code>```блок кода```</code> → блок кода</p>
+                <p><code>> цитата</code> → цитата</p>
+                <p><code>||спойлер||</code> → спойлер</p>
+                <p>Ссылки вида <code>https://...</code> и <code>www...</code> становятся кликабельными автоматически.</p>
+            </div>
+        </section>
+
+        <section id="tab-forum" class="tab">
+            <h1>Форум помощи</h1>
+            <div class="forum-toolbar">
+                <input id="forumSearch" type="text" placeholder="Поиск по темам и ответам...">
+                <button id="forumRefreshBtn" type="button">Обновить</button>
+            </div>
+            <div class="card">
+                <label>Заголовок вопроса</label>
+                <input id="topicTitle" type="text" maxlength="160" placeholder="Коротко опишите проблему">
+                <label>Описание</label>
+                <textarea id="topicBody" rows="5" maxlength="5000" placeholder="Подробно опишите, что не работает"></textarea>
+                <button id="createTopicBtn">Создать тему</button>
+            </div>
+            <div id="forumList" class="forum-list"></div>
+        </section>
+    </main>
+</div>
+<script src="/static/help.js?v=20260223d"></script>
+</body>
+</html>

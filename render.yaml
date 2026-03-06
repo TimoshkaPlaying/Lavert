@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: levart-chat-beta
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --worker-class eventlet -w 1 -b 0.0.0.0:$PORT server.server:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11

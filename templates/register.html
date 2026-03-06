@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Register</title>
+<link rel="stylesheet" href="/static/style.css?v=20260223t">
+</head>
+
+<body class="center">
+<div id="toast-container"></div>
+<div class="card">
+
+<h2>Регистрация</h2>
+
+<input id="firstName" placeholder="Имя" autocomplete="given-name">
+<input id="lastName" placeholder="Фамилия" autocomplete="family-name">
+<input id="regUser" placeholder="Никнейм (для входа)" autocomplete="username">
+<input id="regPass" type="password" placeholder="Пароль" autocomplete="new-password">
+
+<button onclick="register()">Создать аккаунт</button>
+
+<a href="/info" class="link-back">← Вернуться на главную</a>
+
+</div>
+
+<script type="module" src="/static/script.js?v=20260223t"></script>
+
+</body>
+</html>

@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+    <title>Levart Secure Chat</title>
+    <link rel="stylesheet" href="/static/style.css?v=20260305n">
+    <link rel="stylesheet" href="/static/calls.css?v=20260305n">
+    <style>
+        /* Inline переопределения для быстрой кастомизации темы через Внешний вид */
+        :root { --panel: #1e293b; }
+        ::-webkit-scrollbar { width: 5px; }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
+    </style>
+</head>
+<body class="chat-layout">
+
+<!-- ─── TOAST ─── -->
+<div id="toast-container"></div>
+
+<!-- ═══════════════════════════════════════════════════════
+     FOLDER BAR (папки чатов)
+═══════════════════════════════════════════════════════ -->
+<div class="folder-bar" id="folderBar">
+    <!-- Наполняется через JS -->
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     SIDEBAR
+═══════════════════════════════════════════════════════ -->
+<div class="sidebar">
+    <div class="sidebar-header">
+        <div style="display:flex;align-items:center;gap:10px;">
+            <button onclick="openSettings()" style="background:transparent;border:1px solid var(--glass-border);color:var(--text-dim);padding:0;border-radius:8px;cursor:pointer;width:34px;height:34px;display:flex;align-items:center;justify-content:center;font-size:18px;" title="Настройки">⚙️</button>
+            <div>
+                <div class="sidebar-username">В сети как</div>
+                <div class="sidebar-me" id="me"></div>
+            </div>
+        </div>
+        <button onclick="logout()" style="background:#ef4444;color:white;border:none;padding:7px 14px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:700;width:auto;">Выйти</button>
+    </div>
+
+    <div class="discover-strip" id="discoverStrip">
+        <div class="search-box discover-search">
+            <button id="storiesSearchBackBtn" class="stories-search-back" title="Вернуть поиск">🔍</button>
+            <input id="searchUser" placeholder="Поиск (@ник — все, имя — знакомые)" oninput="search()" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
+        </div>
+        <div class="stories-bar-wrap discover-stories" id="storiesWrap">
+            <div class="stories-bar" id="storiesBar"></div>
+        </div>
+    </div>
+    <div id="search-results"></div>
+
+    <hr style="border:0;border-top:1px solid var(--glass-border);margin:1px 0 1px;">
+    <div class="section-title">Мои чаты</div>
+    <div id="contacts"></div>
+
+    <div class="sidebar-actions">
+        <button class="btn-create-group" onclick="openCreateGroupModal()">+ Создать группу</button>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     CHAT AREA
+═══════════════════════════════════════════════════════ -->
+<div class="chat-area" id="chatArea">
+    <!-- Заголовок чата -->
+    <div id="chatHeader" class="chat-header" onclick="onChatHeaderClick()">
+        <!-- Внутри div#chatHeader, самым первым дочерним элементом: -->
+        <button id="backToChats" style="display:none;" onclick="goBackToChats(event)" title="Назад">‹</button>
+        <div class="chat-header-avatar" id="chatHeaderAvatar">💬</div>
+        <div class="chat-header-info">
+            <div class="chat-header-name" id="chatHeaderName">Levart Secure Chat</div>
+            <div class="chat-header-sub" id="chatHeaderSub">Выберите чат</div>
+        </div>
+        <div class="chat-header-hint" id="chatHeaderHint"></div>
+    </div>
+
+    <!-- Сообщения -->
+    <div id="chatPinnedBar" class="chat-pinned-bar" style="display:none;"></div>
+    <div id="messages"></div>
+
+    <!-- Превью ответа -->
+    <div id="reply-preview" style="display:none;border-left:3px solid var(--accent);padding:7px 42px 7px 14px;position:relative;background:var(--accent-dim);flex-shrink:0;">
+        <div id="reply-text" style="font-size:13px;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></div>
+        <div onclick="cancelReply()" style="position:absolute;right:12px;top:50%;transform:translateY(-50%);cursor:pointer;color:var(--danger);font-size:18px;">✕</div>
+    </div>
+
+    <!-- Ввод сообщения -->
+    <div id="input-area" class="input-box" style="display:none;">
+        <div class="attachment-wrapper">
+            <div id="newMsgBadge" class="new-msg-badge" onclick="scrollChatToBottom()">Новые сообщения ↓</div>
+            <div id="scrollDownBtn" class="scroll-down-btn" onclick="scrollChatToBottom()">↓</div>
+            <button class="attach-btn" id="attachBtn">📎</button>
+            <div class="attach-menu" id="attachMenu">
+                <div class="attach-item" onclick="triggerFileInput('image/*,video/*')"><span>🖼️</span> Фото / Видео</div>
+                <div class="attach-item" onclick="triggerFileInput('*/*')"><span>📄</span> Файл</div>
+            </div>
+            <input type="file" id="fileInput" style="display:none;" onchange="handleFileSelect(event)">
+        </div>
+        <textarea id="messageInput" placeholder="Зашифрованное сообщение..." style="margin:0;" rows="1" autocomplete="new-password" autocorrect="off" autocapitalize="none" spellcheck="false" inputmode="text"></textarea>
+        <button class="media-quick-btn tg-mic-btn" id="voiceRecordBtn" onclick="recordVoiceMessage()" title="Записать голосовое">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3zm5-3a1 1 0 0 1 2 0 7 7 0 0 1-6 6.92V22h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-3.08A7 7 0 0 1 5 12a1 1 0 1 1 2 0 5 5 0 1 0 10 0z"/></svg>
+        </button>
+        <button class="media-quick-btn tg-video-note-btn" id="videoRecordBtn" onclick="recordVideoNote()" title="Записать кружок">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 1 0 18a9 9 0 0 1 0-18zm0 3.2a5.8 5.8 0 1 0 0 11.6a5.8 5.8 0 0 0 0-11.6z"/></svg>
+        </button>
+        <button class="emoji-trigger-btn" id="emojiTriggerBtn" onclick="toggleEmojiPanel()" title="Эмодзи, стикеры, GIF">😊</button>
+        <button class="send-btn" onclick="sendMessage()">➤</button>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     БОКОВАЯ ПАНЕЛЬ ПРОФИЛЯ (пользователь)
+═══════════════════════════════════════════════════════ -->
+<div id="userInfoPanel" class="user-info-panel">
+    <div class="user-info-header">
+        <h3>Профиль</h3>
+        <div class="user-info-header-actions">
+            <button class="close-panel-btn" onclick="closeUserInfo()">✕</button>
+        </div>
+    </div>
+    <div class="user-info-body">
+        <div class="user-info-avatar-big">
+            <img id="userInfoAvatar" src="" alt="">
+            <span id="userInfoAvatarLetter">?</span>
+        </div>
+        <div class="user-info-name" id="userInfoName">—</div>
+        <div class="user-info-username" id="userInfoUsername">@—</div>
+
+        <div class="user-info-section" id="userInfoBioSection" style="display:none;">
+            <div class="info-label">О себе</div>
+            <div class="info-value" id="userInfoBio"></div>
+        </div>
+        <div class="user-info-section" id="userInfoBirthdateSection" style="display:none;">
+            <div class="info-label">Дата рождения</div>
+            <div class="info-value" id="userInfoBirthdate"></div>
+        </div>
+
+        <div class="info-tabs">
+            <button class="info-tab active" onclick="switchInfoTab('media',this)">🖼 Медиа</button>
+            <button class="info-tab" onclick="switchInfoTab('files',this)">📄 Файлы</button>
+        </div>
+        <div id="infoMediaGrid" class="info-media-grid"></div>
+        <div id="infoFilesList" class="info-files-list" style="display:none;"></div>
+
+        <div class="user-info-actions">
+            <button id="userInfoActionBtn" class="btn-user-action" onclick="startChatFromInfo()">💬 Написать</button>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     БОКОВАЯ ПАНЕЛЬ ГРУППЫ
+═══════════════════════════════════════════════════════ -->
+<div id="groupInfoPanel" class="user-info-panel">
+    <div class="user-info-header">
+        <h3>Группа</h3>
+        <div class="user-info-header-actions">
+            <button class="pencil-btn" id="groupEditBtn" onclick="toggleGroupEdit()" title="Редактировать">✏️</button>
+            <button class="close-panel-btn" onclick="closeGroupPanel()">✕</button>
+        </div>
+    </div>
+    <div class="user-info-body">
+        <!-- Просмотр -->
+        <div id="groupViewMode">
+            <div class="user-info-avatar-big">
+                <img id="groupPanelAvatar" src="" alt="">
+                <span id="groupPanelAvatarLetter">G</span>
+            </div>
+            <div class="user-info-name" id="groupPanelName"></div>
+            <div class="user-info-section" id="groupPanelDescSection" style="display:none;">
+                <div class="info-label">Описание</div>
+                <div class="info-value" id="groupPanelDesc"></div>
+            </div>
+            <div class="user-info-section">
+                <div class="info-label">Ссылка-приглашение</div>
+                <div class="group-invite-row">
+                    <input id="groupInviteLink" class="group-invite-input" type="text" readonly value="">
+                    <button class="btn-user-action" onclick="copyGroupInviteLink()">Копировать</button>
+                </div>
+            </div>
+            <div class="user-info-section">
+                <div class="info-label">Участники <span id="groupMemberCount"></span></div>
+                <div class="group-member-list" id="groupMemberList"></div>
+            </div>
+            <div class="user-info-section" id="groupPermSection" style="display:none;">
+                <div class="info-label">Права участников (по умолчанию)</div>
+                <label><input type="checkbox" id="permSendMessages"> Можно писать сообщения</label><br>
+                <label><input type="checkbox" id="permSendLinks"> Можно отправлять ссылки</label><br>
+                <label><input type="checkbox" id="permSendMedia"> Можно отправлять медиа/файлы</label><br>
+                <label><input type="checkbox" id="permSendStickers"> Можно отправлять стикеры</label><br>
+                <label><input type="checkbox" id="permSendGifs"> Можно отправлять GIF</label><br>
+                <label><input type="checkbox" id="permSendVoice"> Можно отправлять голосовые</label><br>
+                <label><input type="checkbox" id="permSendVideoNotes"> Можно отправлять кружки</label><br>
+                <label><input type="checkbox" id="permStartCalls"> Можно начинать звонки</label><br>
+                <label><input type="checkbox" id="permAddMembers"> Можно добавлять участников</label><br>
+                <label><input type="checkbox" id="permRemoveMembers"> Можно удалять участников</label><br>
+                <label><input type="checkbox" id="permPinMessages"> Можно закреплять для всех</label><br>
+                <label><input type="checkbox" id="permChangeInfo"> Можно менять название/описание</label><br>
+                <label><input type="checkbox" id="permManagePermissions"> Можно изменять права участников</label><br>
+                <button class="btn-user-action group-perm-main-btn" style="margin-top:8px;" onclick="saveGroupDefaultPermissions()">Сохранить права</button>
+                <button class="btn-user-action group-perm-main-btn is-accent" style="margin-top:8px;" onclick="openGroupMemberRightsManager()">Участники и их права</button>
+            </div>
+            <div class="info-tabs">
+                <button class="info-tab active" onclick="switchGroupInfoTab('media',this)">🖼 Медиа</button>
+                <button class="info-tab" onclick="switchGroupInfoTab('files',this)">📄 Файлы</button>
+                <button class="info-tab" onclick="switchGroupInfoTab('pins',this)">📌 Закрепы</button>
+            </div>
+            <div id="groupInfoMediaGrid" class="info-media-grid"></div>
+            <div id="groupInfoFilesList" class="info-files-list" style="display:none;"></div>
+            <div id="groupInfoPinnedList" class="info-files-list" style="display:none;"></div>
+            <div class="user-info-actions" id="groupPanelActions"></div>
+        </div>
+
+        <!-- Редактирование (только для создателя) -->
+        <div id="groupEditMode" style="display:none;">
+            <h3 style="margin-bottom:20px;">Редактировать группу</h3>
+
+            <div class="group-avatar-picker" id="groupEditAvatarPicker" onclick="document.getElementById('groupEditAvatarInput').click()">
+                <img id="groupEditAvatarPreview" src="" style="display:none;width:100%;height:100%;object-fit:cover;border-radius:50%;">
+                <span id="groupEditAvatarIcon">📷</span>
+                <input type="file" id="groupEditAvatarInput" accept="image/*" style="display:none;" onchange="previewEditGroupAvatar(event)">
+            </div>
+
+            <div class="settings-section">
+                <label>Название</label>
+                <input type="text" id="groupEditName" placeholder="Название группы">
+            </div>
+            <div class="settings-section">
+                <label>Описание</label>
+                <textarea id="groupEditDesc" rows="3" placeholder="Описание группы"></textarea>
+            </div>
+            <div class="settings-section" id="groupEditMembersSection" style="display:none;">
+                <label>Участники и права</label>
+                <div class="group-edit-members-actions">
+                    <button class="btn-user-action" id="groupEditAddMemberBtn" type="button">➕ Добавить участника</button>
+                </div>
+                <div class="group-edit-members-list" id="groupEditMemberList"></div>
+            </div>
+            <div class="settings-actions" style="border:none;padding:0;margin-top:16px;">
+                <button class="btn-save" id="groupEditSaveBtn" onclick="saveGroupEdit()">Сохранить</button>
+                <button class="btn-cancel" onclick="cancelGroupEdit()">Отмена</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     МОДАЛКИ
+═══════════════════════════════════════════════════════ -->
+
+<!-- Подтверждение -->
+<div id="customModal" class="modal-overlay" style="display:none;">
+    <div class="modal-content card">
+        <h3 id="modalTitle">Подтверждение</h3>
+        <p id="modalText"></p>
+        <input type="password" id="modalInput" placeholder="Введите пароль" style="display:none;margin-top:14px;">
+        <div class="modal-buttons">
+            <button id="modalCancel" class="secondary">Отмена</button>
+            <button id="modalConfirm">Подтвердить</button>
+        </div>
+    </div>
+</div>
+
+<!-- Переименование чата -->
+<div id="nicknameModal" class="modal-overlay" style="display:none;">
+    <div class="modal-content card">
+        <h3>Изменить отображаемое имя</h3>
+        <p style="color:var(--text-dim);font-size:13px;margin-bottom:16px;">Это имя будет видно только вам</p>
+        <input type="text" id="nicknameInput" placeholder="Имя Фамилия (оставьте пустым для сброса)" maxlength="40">
+        <div class="modal-buttons">
+            <button class="secondary" onclick="closeNicknameModal()">Отмена</button>
+            <button onclick="saveNickname()">Сохранить</button>
+        </div>
+    </div>
+</div>
+
+<!-- Просмотр изображений -->
+<div id="imageViewer" class="image-viewer-overlay" style="display:none;">
+    <div class="viewer-header">
+        <span id="viewerFileName"></span>
+        <button class="close-viewer" onclick="closeImageViewer()">✕</button>
+    </div>
+    <div class="viewer-content"><img id="fullImage" src=""></div>
+    <div class="viewer-footer"><button id="viewerDownloadBtn" class="download-btn">📥 Скачать</button></div>
+</div>
+
+<!-- Создание группы -->
+<div id="groupModal" class="modal-overlay" style="display:none;">
+    <div class="modal-content card" style="max-width:460px;">
+        <h3 style="margin-bottom:20px;">Новая группа</h3>
+
+        <div class="group-avatar-picker" onclick="document.getElementById('groupAvatarInput').click()">
+            <img id="groupAvatarPreview" src="" style="display:none;width:100%;height:100%;object-fit:cover;border-radius:50%;">
+            <span id="groupAvatarIcon">📷</span>
+            <input type="file" id="groupAvatarInput" accept="image/*" style="display:none;" onchange="handleGroupAvatarChange(event)">
+        </div>
+
+        <input type="text" id="groupName" placeholder="Название группы *" style="margin-bottom:10px;">
+        <textarea id="groupDesc" rows="2" placeholder="Описание (необязательно)" style="margin-bottom:10px;resize:none;"></textarea>
+        <div id="selectedUsersArea" style="min-height:24px;margin-bottom:8px;display:flex;flex-wrap:wrap;gap:6px;"></div>
+        <input type="text" id="groupUserSearch" placeholder="@ник или имя участника..." oninput="searchForGroup()" style="margin-bottom:6px;">
+        <div id="groupSearchList" style="max-height:180px;overflow-y:auto;border-radius:8px;"></div>
+
+        <div class="modal-buttons" style="margin-top:18px;">
+            <button class="secondary" onclick="closeGroupModal()">Отмена</button>
+            <button onclick="finalizeGroupCreation()">Создать</button>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     НАСТРОЙКИ
+═══════════════════════════════════════════════════════ -->
+<div id="settingsModal" class="settings-overlay" style="display:none;">
+    <button class="settings-mobile-menu-btn" onclick="toggleSettingsMobileMenu()" title="Разделы">☰</button>
+    <div class="settings-mobile-backdrop" onclick="closeSettingsMobileMenu()"></div>
+    <div class="settings-sidebar">
+        <div class="settings-nav">
+            <div class="settings-nav-item active" data-tab="profile">👤 Мой аккаунт</div>
+            <div class="settings-nav-item" data-tab="security">🔒 Безопасность</div>
+            <div class="settings-nav-item" data-tab="privacy">🛡️ Конфиденциальность</div>
+            <div class="settings-nav-sep"></div>
+            <div class="settings-nav-item" data-tab="appearance">🎨 Внешний вид</div>
+            <div class="settings-nav-item" data-tab="folders">📁 Папки чатов</div>
+            <div class="settings-nav-sep"></div>
+            <div class="settings-nav-item" data-tab="support">🆘 Поддержка</div>
+            <div class="settings-nav-item" onclick="openHelpCenter()">❓ Центр помощи</div>
+            <div class="settings-nav-item" data-tab="sticker-editor">🎨 Редактор стикеров</div>
+        </div>
+        <div class="settings-close-btn" onclick="closeSettings()">✕ Закрыть</div>
+    </div>
+
+    <div class="settings-content">
+
+        <!-- Профиль -->
+        <div class="settings-tab" id="tab-profile">
+            <h2>Мой аккаунт</h2>
+            <div class="profile-banner">
+                <div class="profile-avatar-section">
+                    <div class="profile-avatar" id="settingsAvatar">
+                        <img id="avatarImage" src="" style="display:none;width:100%;height:100%;object-fit:cover;border-radius:50%;">
+                        <span id="avatarLetter">A</span>
+                        <input type="file" id="avatarUpload" accept="image/*" style="display:none;">
+                        <div class="avatar-overlay" onclick="document.getElementById('avatarUpload').click()">📷</div>
+                    </div>
+                    <div class="profile-info">
+                        <div class="profile-name" id="displayNamePreview">Имя Фамилия</div>
+                        <div class="profile-username" id="usernamePreview">@username</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="settings-section">
+                <label>Имя</label>
+                <input id="settingsFirstName" type="text" placeholder="Ваше имя">
+            </div>
+            <div class="settings-section">
+                <label>Фамилия</label>
+                <input id="settingsLastName" type="text" placeholder="Ваша фамилия">
+            </div>
+            <div class="settings-section">
+                <label>Никнейм</label>
+                <input id="settingsUsername" type="text" disabled>
+                <div class="input-hint">Никнейм нельзя изменить</div>
+            </div>
+            <div class="settings-section">
+                <label>О себе <span style="font-size:11px;text-transform:none;font-weight:400;color:var(--text-dim);">(макс. 190 символов)</span></label>
+                <div class="char-counter-wrapper" style="position:relative;">
+                    <textarea id="settingsBio" maxlength="190" rows="3" placeholder="Расскажите о себе..."></textarea>
+                    <div class="char-counter" id="bioCounter">0 / 190</div>
+                </div>
+            </div>
+            <div class="settings-section">
+                <label>Дата рождения</label>
+                <input type="date" id="settingsBirthdate">
+            </div>
+            <div class="settings-actions">
+                <button class="btn-save" onclick="saveProfileSettings()">Сохранить</button>
+                <button class="btn-cancel" onclick="resetProfileForm()">Сбросить</button>
+            </div>
+        </div>
+
+        <!-- Безопасность -->
+        <div class="settings-tab" id="tab-security" style="display:none;">
+            <h2>Безопасность</h2>
+            <div class="settings-section">
+                <label>Смена пароля</label>
+                <p class="section-description">Введите текущий и новый пароль</p>
+                <div class="password-change-form">
+                    <input id="currentPassword" type="password" placeholder="Текущий пароль">
+                    <input id="newPassword" type="password" placeholder="Новый пароль">
+                    <input id="confirmPassword" type="password" placeholder="Подтвердите новый пароль">
+                    <button class="btn-change-password" onclick="changePassword()">Сменить пароль</button>
+                </div>
+            </div>
+            <div class="settings-section danger-zone">
+                <label>⚠️ Опасная зона</label>
+                <p class="section-description">Необратимые действия</p>
+                <button class="btn-danger" onclick="deleteAccount()">Удалить аккаунт</button>
+            </div>
+        </div>
+
+        <!-- Конфиденциальность -->
+        <div class="settings-tab" id="tab-privacy" style="display:none;">
+            <h2>Конфиденциальность</h2>
+            <div class="settings-section">
+                <label>Кто видит дату рождения</label>
+                <p class="section-description">Управляйте видимостью даты рождения</p>
+                <select id="birthdatePrivacy">
+                    <option value="all">🌍 Все</option>
+                    <option value="friends" selected>👥 Только друзья</option>
+                    <option value="nobody">🔒 Никто</option>
+                </select>
+            </div>
+            <div class="settings-section">
+                <label>Кто видит мои истории</label>
+                <p class="section-description">Настройка видимости историй</p>
+                <select id="storyPrivacy">
+                    <option value="all">🌍 Все пользователи</option>
+                    <option value="friends" selected>👥 Друзья и контакты</option>
+                    <option value="mutual">🤝 Только взаимные друзья</option>
+                    <option value="nobody">🔒 Никто</option>
+                </select>
+                <button class="btn-save" style="margin-top:14px;width:auto;padding:11px 24px;" onclick="savePrivacySettings()">Сохранить</button>
+            </div>
+        </div>
+
+        <!-- Внешний вид -->
+        <div class="settings-tab" id="tab-appearance" style="display:none;">
+            <h2>Внешний вид</h2>
+
+            <!-- Тема -->
+            <div class="appearance-section">
+                <h3>Тема</h3>
+                <div class="theme-grid">
+                    <div class="theme-card active" data-theme="dark" onclick="applyTheme('dark',this)">
+                        <div class="theme-card-preview" style="background:linear-gradient(135deg,#0f172a,#1e293b);"></div>
+                        <div class="theme-name">Тёмная</div>
+                    </div>
+                    <div class="theme-card" data-theme="darker" onclick="applyTheme('darker',this)">
+                        <div class="theme-card-preview" style="background:linear-gradient(135deg,#000,#111);"></div>
+                        <div class="theme-name">Чёрная</div>
+                    </div>
+                    <div class="theme-card" data-theme="navy" onclick="applyTheme('navy',this)">
+                        <div class="theme-card-preview" style="background:linear-gradient(135deg,#0a1628,#122040);"></div>
+                        <div class="theme-name">Морская</div>
+                    </div>
+                    <div class="theme-card" data-theme="forest" onclick="applyTheme('forest',this)">
+                        <div class="theme-card-preview" style="background:linear-gradient(135deg,#0a1a0e,#0f2813);"></div>
+                        <div class="theme-name">Лесная</div>
+                    </div>
+                    <div class="theme-card" data-theme="purple" onclick="applyTheme('purple',this)">
+                        <div class="theme-card-preview" style="background:linear-gradient(135deg,#130a24,#1c0f35);"></div>
+                        <div class="theme-name">Фиолет</div>
+                    </div>
+                    <div class="theme-card" data-theme="custom" onclick="applyTheme('custom',this)">
+                        <div class="theme-card-preview" style="background:linear-gradient(135deg,#1a1a2e,#16213e);display:flex;align-items:center;justify-content:center;font-size:22px;">🎨</div>
+                        <div class="theme-name">Свой</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Акцентный цвет -->
+            <div class="appearance-section">
+                <h3>Акцентный цвет</h3>
+                <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px;">
+                    <div class="accent-dot" data-color="#3b82f6" onclick="setAccent('#3b82f6',this)" style="width:36px;height:36px;border-radius:50%;background:#3b82f6;cursor:pointer;border:3px solid white;transition:transform 0.2s;"></div>
+                    <div class="accent-dot" data-color="#8b5cf6" onclick="setAccent('#8b5cf6',this)" style="width:36px;height:36px;border-radius:50%;background:#8b5cf6;cursor:pointer;border:2px solid transparent;transition:transform 0.2s;"></div>
+                    <div class="accent-dot" data-color="#10b981" onclick="setAccent('#10b981',this)" style="width:36px;height:36px;border-radius:50%;background:#10b981;cursor:pointer;border:2px solid transparent;transition:transform 0.2s;"></div>
+                    <div class="accent-dot" data-color="#f59e0b" onclick="setAccent('#f59e0b',this)" style="width:36px;height:36px;border-radius:50%;background:#f59e0b;cursor:pointer;border:2px solid transparent;transition:transform 0.2s;"></div>
+                    <div class="accent-dot" data-color="#ef4444" onclick="setAccent('#ef4444',this)" style="width:36px;height:36px;border-radius:50%;background:#ef4444;cursor:pointer;border:2px solid transparent;transition:transform 0.2s;"></div>
+                    <div class="accent-dot" data-color="#ec4899" onclick="setAccent('#ec4899',this)" style="width:36px;height:36px;border-radius:50%;background:#ec4899;cursor:pointer;border:2px solid transparent;transition:transform 0.2s;"></div>
+                    <div class="accent-dot" data-color="#06b6d4" onclick="setAccent('#06b6d4',this)" style="width:36px;height:36px;border-radius:50%;background:#06b6d4;cursor:pointer;border:2px solid transparent;transition:transform 0.2s;"></div>
+                </div>
+                <div class="color-picker-row">
+                    <div>
+                        <div class="color-picker-label">Свой цвет</div>
+                        <div class="color-picker-sub">Выберите любой цвет акцента</div>
+                    </div>
+                    <input type="color" id="accentColorPicker" value="#3b82f6" oninput="setAccent(this.value,null)">
+                </div>
+            </div>
+
+            <!-- Размер шрифта -->
+            <div class="appearance-section">
+                <h3>Шрифт и размер</h3>
+                <div class="slider-row">
+                    <div class="slider-label">Размер текста</div>
+                    <input type="range" id="fontSizeSlider" min="12" max="20" value="14" step="1" oninput="applyFontSize(this.value)">
+                    <div class="slider-value" id="fontSizeValue">14px</div>
+                </div>
+                <div class="font-option-grid" style="margin-top:12px;">
+                    <button class="font-option active" data-font="Inter" onclick="applyFont('Inter',this)">Inter</button>
+                    <button class="font-option" data-font="Segoe UI" onclick="applyFont('Segoe UI',this)">Segoe UI</button>
+                    <button class="font-option" data-font="Georgia" onclick="applyFont('Georgia',this)" style="font-family:Georgia;">Georgia</button>
+                    <button class="font-option" data-font="monospace" onclick="applyFont('monospace',this)" style="font-family:monospace;">Mono</button>
+                </div>
+            </div>
+
+            <!-- Отступы сообщений -->
+            <div class="appearance-section">
+                <h3>Плотность сообщений</h3>
+                <div class="slider-row">
+                    <div class="slider-label">Отступ между</div>
+                    <input type="range" id="msgGapSlider" min="2" max="20" value="6" step="1" oninput="applyMsgGap(this.value)">
+                    <div class="slider-value" id="msgGapValue">6px</div>
+                </div>
+            </div>
+
+            <!-- Кастомный CSS -->
+            <div class="appearance-section">
+                <h3>Свой CSS</h3>
+                <p class="section-description">Для продвинутых пользователей — добавьте свои стили</p>
+                <textarea id="customCssInput" rows="5" placeholder="/* Ваш CSS */"></textarea>
+                <button class="btn-save" style="margin-top:10px;width:auto;padding:10px 22px;" onclick="applyCustomCss()">Применить</button>
+                <button class="btn-cancel" style="margin-top:10px;width:auto;padding:10px 22px;" onclick="resetCustomCss()">Сбросить</button>
+            </div>
+
+        </div>
+
+        <!-- Папки чатов -->
+        <div class="settings-tab" id="tab-folders" style="display:none;">
+            <h2>Папки чатов</h2>
+            <p class="section-description">Организуйте чаты по папкам — как в Telegram. Встроенные папки нельзя удалить.</p>
+
+            <div class="folder-settings-list" id="folderSettingsList">
+                <!-- Рендерится через JS -->
+            </div>
+            
+            <div style="margin-top:20px;">
+                <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-dim);margin-bottom:12px;">➕ Новая папка</div>
+                <div class="folder-create-form" id="folderCreateForm">
+                    <div>
+                        <label style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim);font-weight:700;display:block;margin-bottom:8px;">Иконка</label>
+                        <div class="emoji-picker-row" id="folderEmojiPicker"></div>
+                        <div style="margin-top:8px;display:flex;align-items:center;gap:8px;">
+                            <input type="text" id="folderEmojiCustom" placeholder="Свой эмодзи 🎉" style="width:140px;" maxlength="4">
+                            <span style="font-size:12px;color:var(--text-dim);">→ <span id="folderEmojiPreview">📁</span></span>
+                        </div>
+                    </div>
+                    <div>
+                        <label style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim);font-weight:700;display:block;margin-bottom:8px;">Название</label>
+                        <input type="text" id="folderNameInput" placeholder="Работа, Семья..." maxlength="20">
+                    </div>
+                    <button class="btn-save" style="width:auto;padding:10px 22px;" onclick="createFolder()">Создать папку</button>
+                </div>
+            </div>
+
+            
+        </div>
+
+        <!-- Техническая поддержка -->
+        <div class="settings-tab" id="tab-support" style="display:none;">
+            <h2>Техническая поддержка</h2>
+            <p class="section-description">Опишите проблему и мы постараемся помочь как можно скорее. Ответ придёт в уведомлениях.</p>
+
+            <div class="settings-section">
+                <label>Тема обращения</label>
+                <select id="supportSubject">
+                    <option value="bug">🐛 Ошибка / баг</option>
+                    <option value="account">👤 Проблема с аккаунтом</option>
+                    <option value="security">🔒 Безопасность</option>
+                    <option value="feature">💡 Предложение / идея</option>
+                    <option value="other">❓ Другое</option>
+                </select>
+            </div>
+            <div class="settings-section">
+                <label>Описание проблемы</label>
+                <div class="char-counter-wrapper" style="position:relative;">
+                    <textarea id="supportMessage" rows="6" maxlength="2000" placeholder="Опишите проблему подробно..."></textarea>
+                    <div class="char-counter" id="supportCounter">0 / 2000</div>
+                </div>
+            </div>
+
+            <div id="supportSuccess" style="display:none;padding:16px;background:rgba(16,185,129,0.1);border:1px solid var(--success);border-radius:12px;margin-bottom:16px;text-align:center;">
+                <div style="font-size:24px;margin-bottom:8px;">✅</div>
+                <div style="font-weight:700;margin-bottom:4px;">Обращение отправлено!</div>
+                <div style="font-size:13px;color:var(--text-dim);" id="supportTicketId"></div>
+            </div>
+
+            <div class="settings-actions" style="border:none;padding:0;">
+                <button class="btn-save" onclick="sendSupportTicket()">📨 Отправить обращение</button>
+                <button class="btn-cancel" onclick="openCommunityForum()" style="margin-left:8px;">💬 Открыть форум</button>
+            </div>
+
+            <div style="margin-top:32px;padding:20px;background:rgba(15,23,42,0.4);border-radius:12px;border:1px solid var(--glass-border);">
+                <div style="font-size:13px;font-weight:700;margin-bottom:12px;color:var(--text-dim);">📬 Контакты</div>
+                <div style="font-size:13px;margin-bottom:6px;">📧 support@levart.app</div>
+                <div style="font-size:11px;color:var(--text-dim);line-height:1.6;">Время ответа: обычно в течение 24 часов. По вопросам безопасности — приоритет.</div>
+            </div>
+        </div>
+        
+        <!-- Редактор стикеров -->
+        <div class="settings-tab" id="tab-sticker-editor" style="display:none;">
+            <h2>Редактор стикеров</h2>
+            <p class="section-description">Создавай свои стикеры и анимированные GIF. Рисуй, добавляй слои, импортируй картинки.</p>
+
+            <!-- Режим -->
+            <div class="settings-section">
+                <label>Тип</label>
+                <div style="display:flex;gap:10px;">
+                    <button class="font-option active" id="modeSticker" onclick="setStickerEditorMode('sticker',this)">🎭 Стикер</button>
+                    <button class="font-option" id="modeGif" onclick="setStickerEditorMode('gif',this)">🎬 GIF-анимация</button>
+                </div>
+            </div>
+
+            <!-- Холст -->
+            <div class="settings-section">
+                <label>Холст</label>
+                <div style="display:flex;gap:10px;margin-bottom:10px;flex-wrap:wrap;">
+                    <!-- Инструменты -->
+                    <button class="sticker-tool active" id="tool-draw"   onclick="setEditorTool('draw',this)">✏️</button>
+                    <button class="sticker-tool"        id="tool-erase"  onclick="setEditorTool('erase',this)">🧹</button>
+                    <button class="sticker-tool"        id="tool-cut"    onclick="setEditorTool('cut',this)">✂️</button>
+                    <button class="sticker-tool"        id="tool-move"   onclick="setEditorTool('move',this)">✥</button>
+                    <button class="sticker-tool"        id="tool-fill"   onclick="setEditorTool('fill',this)">🪣</button>
+                    <button class="sticker-tool"        id="tool-text"   onclick="setEditorTool('text',this)">T</button>
+                    <div style="width:1px;background:var(--glass-border);margin:0 4px;"></div>
+                    <!-- Цвет -->
+                    <input type="color" id="editorColor" value="#ffffff" style="width:36px;height:36px;border-radius:8px;padding:2px;flex-shrink:0;">
+                    <!-- Размер кисти -->
+                    <input type="range" id="brushSize" min="1" max="40" value="6" style="width:80px;" oninput="updateBrushSize(this.value)">
+                    <span id="brushSizeLabel" style="font-size:12px;color:var(--text-dim);align-self:center;">6px</span>
+                </div>
+
+                <!-- Канвас -->
+                <div id="stickerCanvasWrap" style="position:relative;display:inline-block;border:1px solid var(--glass-border);border-radius:12px;overflow:hidden;background:conic-gradient(from 90deg,#1f2937 0 25%,#374151 0 50%,#1f2937 0 75%,#374151 0) 0/20px 20px;">
+                    <canvas id="stickerCanvas" width="300" height="300" style="display:block;cursor:crosshair;touch-action:none;"></canvas>
+                    <div id="stickerSelectionBox" style="display:none;position:absolute;border:1.5px dashed #60a5fa;box-shadow:0 0 0 9999px rgba(2,6,23,0.25) inset;pointer-events:none;"></div>
+                </div>
+
+                <!-- Действия -->
+                <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
+                    <button class="font-option" onclick="clearCanvas()" style="color:var(--danger);border-color:rgba(239,68,68,0.4);">🗑 Очистить</button>
+                    <button class="font-option" onclick="undoCanvas()">↩ Отмена</button>
+                    <button class="font-option" onclick="trimCanvasToContent()">🪄 Обрезать по контуру</button>
+                    <button class="font-option" onclick="centerCanvasContent()">🎯 Центрировать</button>
+                    <button class="font-option" onclick="newStickerFromScratch()">🆕 Новый стикер</button>
+                    <button class="font-option" onclick="document.getElementById('stickerImportInput').click()">📁 Загрузить</button>
+                    <input type="file" id="stickerImportInput" accept="image/*" style="display:none" onchange="importImageToCanvas(event)">
+                </div>
+            </div>
+
+            <!-- GIF: покадровая анимация -->
+            <div id="gifFramesSection" class="settings-section" style="display:none;">
+                <label>Кадры анимации</label>
+                <div id="gifFramesList" style="display:flex;gap:8px;overflow-x:auto;padding:8px 0;min-height:80px;"></div>
+                <div style="display:flex;gap:8px;margin-top:8px;">
+                    <button class="font-option" onclick="addGifFrame()">+ Добавить кадр</button>
+                    <div style="display:flex;align-items:center;gap:6px;font-size:13px;">
+                        <span style="color:var(--text-dim);">Задержка:</span>
+                        <input type="number" id="frameDelay" value="200" min="50" max="5000" step="50" style="width:70px;padding:6px;"> мс
+                    </div>
+                </div>
+            </div>
+
+            <!-- Сохранить -->
+            <div class="settings-actions" style="border:none;padding:0;">
+                <button class="btn-save" onclick="saveStickerFromEditor()">💾 Сохранить стикер</button>
+                <button class="btn-cancel" style="width:auto;padding:12px 20px;" id="exportGifBtn" onclick="exportGif()" style="display:none;">🎬 Экспорт GIF</button>
+            </div>
+
+            <!-- Мои стикеры -->
+            <div class="settings-section" style="margin-top:24px;">
+                <label>Мои стикеры <span id="myStickerCount" style="font-weight:400;text-transform:none;font-size:11px;"></span></label>
+                <div style="display:flex;gap:8px;align-items:center;margin:8px 0;">
+                    <input id="stickerPackNameInput" type="text" placeholder="Название пака" style="margin:0;">
+                    <button class="font-option" onclick="createStickerPack()">+ Пак</button>
+                </div>
+                <div id="stickerPackList" class="sticker-pack-list"></div>
+                <div id="myStickerList" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;"></div>
+            </div>
+        </div>
+
+    </div><!-- /settings-content -->
+</div><!-- /settingsModal -->
+
+<!-- ═══ ПАНЕЛЬ СТИКЕРОВ / ЭМОДЗИ / GIF ═══ -->
+<div id="emojiPanel" style="display:none;position:fixed;bottom:80px;left:50%;transform:translateX(-50%);width:min(480px,95vw);background:var(--sidebar-bg);border:1px solid var(--glass-border);border-radius:16px;box-shadow:0 16px 48px rgba(0,0,0,0.6);z-index:1000;overflow:hidden;">
+    <!-- Вкладки -->
+    <div style="display:flex;border-bottom:1px solid var(--glass-border);background:rgba(15,23,42,0.8);">
+        <button class="emoji-panel-tab active" data-tab="emoji" onclick="switchEmojiTab('emoji',this)" style="flex:1;padding:12px;background:transparent;border:none;color:var(--text-dim);cursor:pointer;font-size:20px;transition:color 0.2s;">😊</button>
+        <button class="emoji-panel-tab" data-tab="stickers" onclick="switchEmojiTab('stickers',this)" style="flex:1;padding:12px;background:transparent;border:none;color:var(--text-dim);cursor:pointer;font-size:20px;transition:color 0.2s;">🎭</button>
+        <button class="emoji-panel-tab" data-tab="gif" onclick="switchEmojiTab('gif',this)" style="flex:1;padding:12px;background:transparent;border:none;color:var(--text-dim);cursor:pointer;font-size:13px;font-weight:700;transition:color 0.2s;">GIF</button>
+        <button onclick="closeEmojiPanel()" style="padding:12px 16px;background:transparent;border:none;color:var(--text-dim);cursor:pointer;font-size:18px;">✕</button>
+    </div>
+    <div id="emojiSearchBar" style="display:block;padding:10px 12px;border-bottom:1px solid var(--glass-border);">
+        <input id="emojiSearchInput" type="text" placeholder="Поиск эмодзи, стикеров, GIF..." style="margin:0;" oninput="searchEmojiStickersGif(this.value)">
+    </div>
+    <!-- Поиск GIF -->
+    <div id="gifSearchBar" style="display:none;padding:0 12px 10px;">
+        <input id="gifSearchInput" type="text" placeholder="Поиск GIF..." style="margin:0;" oninput="searchGifs(this.value)">
+    </div>
+    <!-- Контент -->
+    <div id="emojiPanelContent" style="height:320px;overflow-y:auto;padding:10px;"></div>
+</div>
+
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<script type="module" src="/static/script.js?v=20260305n"></script>
+<script src="/static/calls.js?v=20260305n"></script>
+</body>
+</html>

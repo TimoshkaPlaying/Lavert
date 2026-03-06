@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Login</title>
+<link rel="stylesheet" href="/static/style.css?v=20260223t">
+</head>
+
+<body class="center">
+<div id="toast-container"></div>
+<div class="card">
+
+<h2>Вход</h2>
+
+<input id="loginUser" placeholder="Ник">
+<input id="loginPass" type="password" placeholder="Пароль">
+
+<button onclick="login()">Войти</button>
+
+<a href="/info" class="link-back">← Вернуться на главную</a>
+
+</div>
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<script type="module" src="/static/script.js?v=20260223t"></script>
+
+</body>
+</html>
