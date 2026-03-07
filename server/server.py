@@ -348,23 +348,68 @@ def _state_storage_enabled():
 
 def _state_object_key(path):
     clean = str(path or "").strip().replace("\\", "/").lstrip("/")
-    return f"{STATE_OBJECT_PREFIX}/{clean}.json" if STATE_OBJECT_PREFIX else f"{clean}.json"
+    if clean.lower().endswith(".json"):
+        final_name = clean
+    else:
+        final_name = f"{clean}.json"
+    return f"{STATE_OBJECT_PREFIX}/{final_name}" if STATE_OBJECT_PREFIX else final_name
+
+def _state_object_candidate_keys(path):
+    clean = str(path or "").strip().replace("\\", "/").lstrip("/")
+    if not clean:
+        return []
+    # Canonical key (fixed): keep existing .json suffix and do not append twice.
+    canonical = _state_object_key(clean)
+    candidates = [canonical]
+
+    # Legacy key bug compatibility: "users.json" -> "users.json.json".
+    if clean.lower().endswith(".json"):
+        legacy_double = f"{STATE_OBJECT_PREFIX}/{clean}.json" if STATE_OBJECT_PREFIX else f"{clean}.json"
+        candidates.append(legacy_double)
+    else:
+        # Old style key that omitted json extension.
+        legacy_plain = f"{STATE_OBJECT_PREFIX}/{clean}" if STATE_OBJECT_PREFIX else clean
+        candidates.append(legacy_plain)
+
+    # Case compatibility for historical keys like "Users.json".
+    base = clean
+    if "/" not in base:
+        case_variants = {base, base.lower(), base.upper(), base.capitalize()}
+        for v in case_variants:
+            if v.lower().endswith(".json"):
+                candidates.append(f"{STATE_OBJECT_PREFIX}/{v}" if STATE_OBJECT_PREFIX else v)
+                candidates.append(f"{STATE_OBJECT_PREFIX}/{v}.json" if STATE_OBJECT_PREFIX else f"{v}.json")
+
+    # Preserve order, drop duplicates.
+    uniq = []
+    seen = set()
+    for k in candidates:
+        if k and k not in seen:
+            uniq.append(k)
+            seen.add(k)
+    return uniq
 
 def _state_read_from_object(path):
     if not _state_storage_enabled():
         return None
-    key = _state_object_key(path)
-    try:
-        obj = _r2_client.get_object(Bucket=STORAGE_BUCKET_NAME, Key=key)
-        body = obj.get("Body")
-        if body is None:
-            return None
-        raw = body.read()
-        if not raw:
-            return None
-        return json.loads(raw.decode("utf-8"))
-    except Exception:
-        return None
+    canonical = _state_object_key(path)
+    for key in _state_object_candidate_keys(path):
+        try:
+            obj = _r2_client.get_object(Bucket=STORAGE_BUCKET_NAME, Key=key)
+            body = obj.get("Body")
+            if body is None:
+                continue
+            raw = body.read()
+            if not raw:
+                continue
+            data = json.loads(raw.decode("utf-8"))
+            # Auto-migrate to canonical key if we loaded legacy key.
+            if key != canonical:
+                _state_write_to_object(path, data)
+            return data
+        except Exception:
+            continue
+    return None
 
 def _state_write_to_object(path, data):
     if not _state_storage_enabled():
