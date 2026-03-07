@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template, send_from_directory, redirect
+from flask import Flask, request, jsonify, render_template, send_from_directory, redirect, Response, stream_with_context
 from flask_socketio import SocketIO, emit
 import json, os, time, uuid, tempfile, subprocess, shutil, logging, sqlite3, threading
 
@@ -11,6 +11,11 @@ try:
     import boto3
 except Exception:
     boto3 = None
+
+try:
+    from botocore.config import Config as BotoConfig
+except Exception:
+    BotoConfig = None
 
 app = Flask(__name__, template_folder="../templates", static_folder="../static")
 socketio = SocketIO(app, cors_allowed_origins="*")
@@ -60,16 +65,29 @@ STORAGE_SECRET_ACCESS_KEY = R2_SECRET_ACCESS_KEY or B2_APPLICATION_KEY
 STORAGE_BUCKET_NAME = R2_BUCKET_NAME or B2_BUCKET_NAME
 STORAGE_PUBLIC_BASE_URL = R2_PUBLIC_BASE_URL or B2_PUBLIC_BASE_URL
 STORAGE_PRESIGN_TTL = R2_PRESIGN_TTL if R2_ENDPOINT_URL else B2_PRESIGN_TTL
+STORAGE_REGION = os.getenv("STORAGE_REGION", "").strip() or os.getenv("AWS_REGION", "").strip() or "us-east-1"
+STORAGE_PROXY_DOWNLOADS = os.getenv("STORAGE_PROXY_DOWNLOADS", "1").strip().lower() not in ("0", "false", "no")
+STORAGE_FALLBACK_LOCAL = os.getenv("STORAGE_FALLBACK_LOCAL", "1").strip().lower() not in ("0", "false", "no")
 
 _r2_client = None
 if boto3 and STORAGE_ENDPOINT_URL and STORAGE_ACCESS_KEY_ID and STORAGE_SECRET_ACCESS_KEY and STORAGE_BUCKET_NAME:
     try:
+        client_kwargs = {}
+        if BotoConfig is not None:
+            client_kwargs["config"] = BotoConfig(
+                signature_version="s3v4",
+                connect_timeout=8,
+                read_timeout=120,
+                max_pool_connections=50,
+                retries={"max_attempts": 2, "mode": "standard"},
+            )
         _r2_client = boto3.client(
             "s3",
             endpoint_url=STORAGE_ENDPOINT_URL,
             aws_access_key_id=STORAGE_ACCESS_KEY_ID,
             aws_secret_access_key=STORAGE_SECRET_ACCESS_KEY,
-            region_name="auto"
+            region_name=STORAGE_REGION,
+            **client_kwargs
         )
     except Exception:
         _r2_client = None
@@ -292,6 +310,32 @@ def _r2_upload_fileobj(fileobj, folder, filename, content_type="application/octe
     )
     return key
 
+def _r2_stream_object(folder, filename):
+    key = _r2_object_key(folder, filename)
+    obj = _r2_client.get_object(Bucket=STORAGE_BUCKET_NAME, Key=key)
+    body = obj.get("Body")
+    content_type = obj.get("ContentType") or "application/octet-stream"
+    content_length = obj.get("ContentLength")
+
+    def _iter_chunks():
+        try:
+            while True:
+                chunk = body.read(1024 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            try:
+                body.close()
+            except Exception:
+                pass
+
+    resp = Response(stream_with_context(_iter_chunks()), mimetype=content_type)
+    if content_length is not None:
+        resp.headers["Content-Length"] = str(content_length)
+    resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return resp
+
 def _r2_signed_or_public_url(key):
     if STORAGE_PUBLIC_BASE_URL:
         return f"{STORAGE_PUBLIC_BASE_URL}/{key}"
@@ -300,6 +344,10 @@ def _r2_signed_or_public_url(key):
         Params={"Bucket": STORAGE_BUCKET_NAME, "Key": key},
         ExpiresIn=max(60, STORAGE_PRESIGN_TTL)
     )
+
+def _save_upload_local(file_storage, file_type, filename):
+    file_storage.seek(0)
+    file_storage.save(os.path.join(UPLOAD_FOLDER, file_type, filename))
 
 def emit_to_user(username, event_name, payload, exclude_sid=None):
     """Отправка Socket.IO-события всем сессиям пользователя."""
@@ -2590,6 +2638,8 @@ def upload_file():
     if 'file' not in request.files:
         return jsonify({"error": "No file"}), 400
     file      = request.files['file']
+    if not file:
+        return jsonify({"error": "No file"}), 400
     file_type = request.form.get('type', 'files')
     if file_type not in ['images', 'files']:
         file_type = 'files'
@@ -2599,12 +2649,31 @@ def upload_file():
         return jsonify({"error": "Файл слишком большой"}), 400
     ext      = os.path.splitext(file.filename or "")[1]
     filename = f"{uuid.uuid4().hex}{ext}"
-    if _r2_enabled():
-        file.seek(0)
-        _r2_upload_fileobj(file.stream, file_type, filename, content_type=(file.content_type or "application/octet-stream"))
-    else:
-        file.save(os.path.join(UPLOAD_FOLDER, file_type, filename))
-    return jsonify({"status": "ok", "url": f"/{file_type}/{filename}", "size": size})
+    url = f"/{file_type}/{filename}"
+    storage_backend = "local"
+    try:
+        if _r2_enabled():
+            try:
+                file.seek(0)
+                _r2_upload_fileobj(
+                    file.stream,
+                    file_type,
+                    filename,
+                    content_type=(file.content_type or "application/octet-stream")
+                )
+                storage_backend = "s3"
+            except Exception as upload_err:
+                app.logger.warning("S3 upload failed, fallback=%s, err=%s", STORAGE_FALLBACK_LOCAL, upload_err)
+                if not STORAGE_FALLBACK_LOCAL:
+                    raise
+                _save_upload_local(file, file_type, filename)
+                storage_backend = "local_fallback"
+                url = f"/local/{file_type}/{filename}"
+        else:
+            _save_upload_local(file, file_type, filename)
+    except Exception:
+        return jsonify({"error": "upload_failed"}), 500
+    return jsonify({"status": "ok", "url": url, "size": size, "storage": storage_backend})
 
 @app.route("/api/transcribe_audio", methods=["POST"])
 def api_transcribe_audio():
@@ -2640,13 +2709,23 @@ def api_transcribe_audio():
 @app.route('/images/<path:filename>')
 def serve_images(filename):
     if _r2_enabled():
-        return redirect(_r2_signed_or_public_url(_r2_object_key("images", filename)))
+        try:
+            if STORAGE_PROXY_DOWNLOADS:
+                return _r2_stream_object("images", filename)
+            return redirect(_r2_signed_or_public_url(_r2_object_key("images", filename)))
+        except Exception:
+            pass
     return send_from_directory(os.path.join(UPLOAD_FOLDER, 'images'), filename)
 
 @app.route('/files/<path:filename>')
 def serve_files(filename):
     if _r2_enabled():
-        return redirect(_r2_signed_or_public_url(_r2_object_key("files", filename)))
+        try:
+            if STORAGE_PROXY_DOWNLOADS:
+                return _r2_stream_object("files", filename)
+            return redirect(_r2_signed_or_public_url(_r2_object_key("files", filename)))
+        except Exception:
+            pass
     return send_from_directory(os.path.join(UPLOAD_FOLDER, 'files'), filename)
 
 @app.route('/uploads/<folder>/<filename>')
@@ -2655,8 +2734,21 @@ def uploaded_file(folder, filename):
     if folder not in ("images", "files", "avatars"):
         return jsonify({"error": "bad_folder"}), 400
     if _r2_enabled():
-        return redirect(_r2_signed_or_public_url(_r2_object_key(folder, filename)))
+        try:
+            if STORAGE_PROXY_DOWNLOADS:
+                return _r2_stream_object(folder, filename)
+            return redirect(_r2_signed_or_public_url(_r2_object_key(folder, filename)))
+        except Exception:
+            pass
     return send_from_directory(os.path.join(UPLOAD_FOLDER, folder), filename)
+
+@app.route('/local/images/<path:filename>')
+def serve_local_images(filename):
+    return send_from_directory(os.path.join(UPLOAD_FOLDER, 'images'), filename)
+
+@app.route('/local/files/<path:filename>')
+def serve_local_files(filename):
+    return send_from_directory(os.path.join(UPLOAD_FOLDER, 'files'), filename)
 
 
 # ─── Бэкап ───────────────────────────────────────────────────────

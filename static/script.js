@@ -4183,12 +4183,17 @@ window.handleFileSelect = async (event) => {
 
         // 4. Отправляем файл на сервер (в папку uploads)
         const formData = new FormData();
-        formData.append('file', new Blob([combined]));
+        formData.append('file', new Blob([combined], { type: file.type || 'application/octet-stream' }), file.name || `upload_${Date.now()}`);
         formData.append('type', file.type.startsWith('image/') ? 'images' : 'files');
 
         console.log("Отправка файла на /upload...");
         const res = await fetch('/upload', { method: 'POST', body: formData });
-        const uploadResult = await res.json();
+        let uploadResult = {};
+        try { uploadResult = await res.json(); } catch { uploadResult = {}; }
+        if (!res.ok) {
+            const msg = uploadResult?.error || `upload_http_${res.status}`;
+            throw new Error(msg);
+        }
 
         if (uploadResult.status === 'ok') {
             console.log("Файл загружен, URL:", uploadResult.url);
@@ -4265,7 +4270,7 @@ async function uploadFileE2E(file) {
         combined.set(new Uint8Array(encryptedContent), iv.length);
 
         const formData = new FormData();
-        formData.append('file', new Blob([combined]));
+        formData.append('file', new Blob([combined], { type: file.type || 'application/octet-stream' }), file.name || `upload_${Date.now()}`);
         formData.append('type', file.type.startsWith('image/') ? 'images' : 'files');
 
         const json = await new Promise((resolve, reject) => {
@@ -4277,7 +4282,18 @@ async function uploadFileE2E(file) {
                     if (fill) fill.style.width = Math.round(e.loaded / e.total * 100) + '%';
                 }
             };
-            xhr.onload = () => { try { resolve(JSON.parse(xhr.responseText)); } catch { reject(); } };
+            xhr.onload = () => {
+                try {
+                    const parsed = JSON.parse(xhr.responseText || '{}');
+                    if (xhr.status < 200 || xhr.status >= 300) {
+                        reject(new Error(parsed?.error || `upload_http_${xhr.status}`));
+                        return;
+                    }
+                    resolve(parsed);
+                } catch {
+                    reject(new Error(`upload_http_${xhr.status}`));
+                }
+            };
             xhr.onerror = reject;
             xhr.send(formData);
         });
@@ -4317,10 +4333,12 @@ async function uploadEncryptedBlobAndMeta(blob, fileName, mimeType, extraMeta = 
     combined.set(new Uint8Array(encryptedContent), iv.length);
     const formData = new FormData();
     const folder = mimeType.startsWith('image/') ? 'images' : 'files';
-    formData.append('file', new Blob([combined], { type: mimeType }));
+    formData.append('file', new Blob([combined], { type: mimeType || 'application/octet-stream' }), fileName || `upload_${Date.now()}`);
     formData.append('type', folder);
     const res = await fetch('/upload', { method: 'POST', body: formData });
-    const uploaded = await res.json();
+    let uploaded = {};
+    try { uploaded = await res.json(); } catch { uploaded = {}; }
+    if (!res.ok) throw new Error(uploaded?.error || `upload_http_${res.status}`);
     if (uploaded.status !== 'ok') throw new Error('upload_failed');
     const exportedKey = await window.crypto.subtle.exportKey("raw", fileKey);
     const keyB64 = btoa(String.fromCharCode(...new Uint8Array(exportedKey)));
