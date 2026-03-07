@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify, render_template, send_from_directory, redirect
 from flask_socketio import SocketIO, emit
-import json, os, time, uuid, tempfile, subprocess, shutil, logging
+import json, os, time, uuid, tempfile, subprocess, shutil, logging, sqlite3, threading
 
 app = Flask(__name__, template_folder="../templates", static_folder="../static")
 socketio = SocketIO(app, cors_allowed_origins="*")
@@ -37,15 +37,104 @@ def serve_crypto(filename):
     return send_from_directory('../crypto', filename)
 
 # ─── Утилиты ────────────────────────────────────────────────────
-def load_json(path):
-    if not os.path.exists(path): return {}
+DB_FILE = "app_data.sqlite3"
+_db_init_done = False
+_db_lock = threading.Lock()
+
+def _load_json_file(path):
+    if not os.path.exists(path):
+        return {}
     with open(path, "r", encoding="utf-8") as f:
-        try: return json.load(f)
-        except: return {}
+        try:
+            return json.load(f)
+        except Exception:
+            return {}
+
+def _db_connect():
+    conn = sqlite3.connect(DB_FILE, timeout=30, check_same_thread=False)
+    conn.execute("PRAGMA busy_timeout=5000")
+    return conn
+
+def _ensure_db():
+    global _db_init_done
+    if _db_init_done:
+        return
+    with _db_lock:
+        if _db_init_done:
+            return
+        conn = _db_connect()
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS json_store (
+                    path TEXT PRIMARY KEY,
+                    payload TEXT NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+                """
+            )
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+            except Exception:
+                pass
+            conn.commit()
+        finally:
+            conn.close()
+        _db_init_done = True
+
+def load_json(path):
+    p = str(path or "").strip()
+    if not p:
+        return {}
+    _ensure_db()
+    for attempt in range(8):
+        conn = _db_connect()
+        try:
+            row = conn.execute("SELECT payload FROM json_store WHERE path = ?", (p,)).fetchone()
+            if row and row[0]:
+                try:
+                    return json.loads(row[0])
+                except Exception:
+                    return {}
+            # Lazy migration from legacy JSON files (first read of each dataset).
+            data = _load_json_file(p)
+            payload = json.dumps(data, ensure_ascii=False)
+            conn.execute(
+                "INSERT OR REPLACE INTO json_store(path, payload, updated_at) VALUES (?, ?, ?)",
+                (p, payload, time.time())
+            )
+            conn.commit()
+            return data
+        except sqlite3.OperationalError as e:
+            if "locked" not in str(e).lower() or attempt == 7:
+                raise
+            time.sleep(0.05 * (attempt + 1))
+        finally:
+            conn.close()
+    return {}
 
 def save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    p = str(path or "").strip()
+    if not p:
+        return
+    _ensure_db()
+    payload = json.dumps(data, ensure_ascii=False)
+    for attempt in range(8):
+        conn = _db_connect()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO json_store(path, payload, updated_at) VALUES (?, ?, ?)",
+                (p, payload, time.time())
+            )
+            conn.commit()
+            return
+        except sqlite3.OperationalError as e:
+            if "locked" not in str(e).lower() or attempt == 7:
+                raise
+            time.sleep(0.05 * (attempt + 1))
+        finally:
+            conn.close()
 
 def emit_to_user(username, event_name, payload, exclude_sid=None):
     """Отправка Socket.IO-события всем сессиям пользователя."""
