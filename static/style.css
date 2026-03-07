@@ -41,6 +41,370 @@
     --panel-w:   360px;
     --app-height: 100dvh;
   }
+
+/* ===== 29. FINAL TUNING (2026-03-07 fix4) ===== */
+@media (max-width: 900px) {
+  /* 1) Опустить блок поиска вниз примерно на 25px и уменьшить отступ под ним */
+  .sidebar .discover-strip,
+  .sidebar.stories-focus-mode .discover-strip {
+    margin-top: 25px !important;
+    margin-bottom: -25px !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    gap: 2px !important;
+  }
+  .sidebar .discover-search,
+  .sidebar .search-box.discover-search {
+    margin: 0 !important;
+    padding: 0 !important;
+    min-height: 32px !important;
+  }
+  .sidebar .discover-search #searchUser {
+    min-height: 32px !important;
+    height: 32px !important;
+    line-height: 32px !important;
+    margin: 0 !important;
+    padding-top: 2px !important;
+    padding-bottom: 2px !important;
+  }
+  .sidebar #search-results {
+    margin-top: 0 !important;
+    padding-top: 0 !important;
+  }
+
+  /* 2) Не обрезать крайние элементы в горизонтальном слайде */
+  #emojiPanel {
+    overflow: visible !important;
+  }
+  #emojiPanelContent {
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    padding-right: 2px !important;
+  }
+  .sticker-pack-list {
+    padding-right: 20px !important;
+    margin-right: 0 !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    scroll-padding-right: 20px !important;
+    scrollbar-gutter: stable !important;
+  }
+  .sticker-pack-list::after {
+    content: "";
+    flex: 0 0 20px;
+  }
+
+  /* 5) Инпут-блок всегда выше клавиатуры на телефоне */
+  body.keyboard-open .chat-area.active-mobile #input-area {
+    position: fixed !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: calc(var(--vk-bottom, 0px) + 6px) !important;
+    z-index: 12150 !important;
+  }
+  body.keyboard-open .chat-area.active-mobile #messages {
+    padding-bottom: calc(102px + var(--vk-bottom, 0px) + env(safe-area-inset-bottom)) !important;
+  }
+}
+
+  /* ===== 28. FINAL MOBILE OVERRIDES (2026-03-07 fix3) ===== */
+  @media (max-width: 900px) {
+    /* 1) Сильно убираем вертикальные отступы вокруг поиска */
+    .sidebar .sidebar-header {
+      margin-bottom: 0 !important;
+      padding-bottom: 0 !important;
+    }
+    .sidebar .discover-strip,
+    .sidebar.stories-focus-mode .discover-strip {
+      margin-top: -14px !important;
+      margin-bottom: -14px !important;
+      padding-top: 0 !important;
+      padding-bottom: 0 !important;
+      gap: 2px !important;
+    }
+    .sidebar .search-box.discover-search,
+    .sidebar.stories-focus-mode .search-box.discover-search {
+      margin: 0 !important;
+      padding: 0 !important;
+    }
+    .sidebar .discover-search #searchUser {
+      margin: 0 !important;
+      min-height: 30px !important;
+      height: 30px !important;
+      line-height: 30px !important;
+      padding-top: 2px !important;
+      padding-bottom: 2px !important;
+    }
+    .sidebar .discover-stories,
+    .sidebar .stories-bar-wrap.discover-stories {
+      margin: 0 !important;
+      padding-top: 0 !important;
+      padding-bottom: 0 !important;
+    }
+
+    /* 2) Допролистывание слайдов до самого конца */
+    .sticker-pack-list {
+      padding-right: 14px !important;
+      scroll-padding-right: 14px !important;
+      overscroll-behavior-x: contain !important;
+    }
+    .discover-stories .stories-bar,
+    .sidebar.stories-focus-mode .discover-stories .stories-bar {
+      padding-right: 20px !important;
+      margin-right: 0 !important;
+      scroll-padding-right: 20px !important;
+      overscroll-behavior-x: contain !important;
+    }
+    .sidebar.stories-focus-mode .discover-stories::after {
+      display: none !important;
+    }
+
+    /* 9) Поднимаем поля над клавиатурой выше и единообразно */
+    body.keyboard-open .chat-area.active-mobile #input-area {
+      bottom: calc(env(safe-area-inset-bottom) + var(--vk-offset, 0px) + 14px) !important;
+    }
+    body.keyboard-open .chat-area.active-mobile #messages {
+      padding-bottom: calc(92px + env(safe-area-inset-bottom) + var(--vk-offset, 0px)) !important;
+    }
+    body.keyboard-open input:focus,
+    body.keyboard-open textarea:focus {
+      scroll-margin-bottom: calc(var(--input-kb-offset, 0px) + 22px) !important;
+    }
+    body.keyboard-open.center > .card {
+      transform: translateY(calc(-1 * min(26vh, max(84px, var(--input-kb-offset, 0px))))) !important;
+      transition: transform 0.18s ease !important;
+    }
+  }
+
+  /* ===== 27. HOTFIX PACK (2026-03-07 fix2) ===== */
+  .sticker-pack-list {
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    -webkit-overflow-scrolling: touch !important;
+    scrollbar-width: thin !important;
+    padding: 0 8px 4px 0 !important;
+    margin-right: -4px !important;
+  }
+  .sticker-pack-list.dragging {
+    cursor: grabbing !important;
+  }
+  .sticker-pack-chip {
+    flex: 0 0 auto !important;
+  }
+
+  @media (max-width: 900px) {
+    .sidebar .sidebar-header {
+      margin-bottom: 2px !important;
+    }
+    .sidebar .discover-strip,
+    .sidebar.stories-focus-mode .discover-strip {
+      margin-bottom: 0 !important;
+      padding-bottom: 1px !important;
+      gap: 3px !important;
+    }
+    .sidebar .discover-search,
+    .sidebar.stories-focus-mode .discover-search {
+      margin: 0 !important;
+      min-height: 32px !important;
+    }
+    .sidebar .discover-search #searchUser,
+    .search-box input#searchUser {
+      height: 32px !important;
+      min-height: 32px !important;
+      padding-top: 4px !important;
+      padding-bottom: 4px !important;
+      font-size: 13px !important;
+    }
+    .sidebar .discover-stories,
+    .sidebar .stories-bar-wrap.discover-stories {
+      margin-top: 0 !important;
+      margin-bottom: 0 !important;
+      min-height: 36px !important;
+    }
+    .sidebar #search-results {
+      margin-top: 0 !important;
+      padding-top: 0 !important;
+    }
+
+    body.keyboard-open .chat-area.active-mobile #input-area {
+      bottom: calc(env(safe-area-inset-bottom) + max(2px, var(--vk-offset, 0px))) !important;
+    }
+    body.keyboard-open .chat-area.active-mobile #messages {
+      padding-bottom: calc(74px + env(safe-area-inset-bottom) + var(--vk-offset, 0px)) !important;
+    }
+
+    .scroll-down-btn {
+      right: calc(env(safe-area-inset-right) + 8px) !important;
+      bottom: 88px !important;
+      z-index: 22 !important;
+    }
+    .chat-area.active-mobile .scroll-down-btn {
+      position: fixed !important;
+      right: calc(env(safe-area-inset-right) + 10px) !important;
+      bottom: calc(86px + env(safe-area-inset-bottom)) !important;
+      z-index: 12120 !important;
+    }
+
+    #emojiPanel {
+      bottom: calc(66px + env(safe-area-inset-bottom)) !important;
+      max-height: 60dvh !important;
+    }
+    #emojiPanelContent {
+      max-height: 44dvh !important;
+      overscroll-behavior: contain !important;
+    }
+  }
+
+  @media (max-width: 900px) and (orientation: portrait) {
+    body.center {
+      align-items: flex-start !important;
+      justify-content: flex-start !important;
+      padding-top: calc(env(safe-area-inset-top) + 12px) !important;
+      padding-bottom: calc(env(safe-area-inset-bottom) + 12px) !important;
+      overflow-y: auto !important;
+    }
+    body.keyboard-open.center {
+      padding-top: calc(env(safe-area-inset-top) + 8px) !important;
+      padding-bottom: calc(env(safe-area-inset-bottom) + 8px) !important;
+    }
+    body.center > .card {
+      margin: 0 auto !important;
+      width: min(94vw, 460px) !important;
+    }
+  }
+
+  /* ===== 26. BUGFIX PACK (2026-03-07) ===== */
+  .modal-overlay {
+    z-index: 30050 !important;
+  }
+  #customModal {
+    z-index: 30060 !important;
+  }
+
+  .chat-pinned-bar {
+    padding: 6px 10px !important;
+    gap: 8px !important;
+  }
+  .chat-pinned-main {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .chat-pinned-title {
+    font-size: 10px !important;
+    line-height: 1.1 !important;
+    opacity: 0.8;
+  }
+  .chat-pinned-snippet {
+    font-size: 12px !important;
+    line-height: 1.2 !important;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  @media (max-width: 900px) {
+    .sidebar .sidebar-header {
+      margin-bottom: 6px !important;
+    }
+    .sidebar .discover-strip,
+    .sidebar.stories-focus-mode .discover-strip {
+      padding: 0 0 4px !important;
+      margin: 0 !important;
+      gap: 4px !important;
+    }
+    .sidebar .discover-search,
+    .sidebar.stories-focus-mode .discover-search {
+      margin: 0 !important;
+      padding: 0 !important;
+      min-height: 36px !important;
+    }
+    .sidebar .discover-search #searchUser {
+      height: 36px !important;
+      min-height: 36px !important;
+      padding-top: 6px !important;
+      padding-bottom: 6px !important;
+    }
+    .sidebar .stories-bar-wrap.discover-stories {
+      margin-top: 0 !important;
+      margin-bottom: 3px !important;
+      padding-top: 0 !important;
+      padding-bottom: 3px !important;
+    }
+    .sidebar #search-results {
+      margin-top: 2px !important;
+      margin-bottom: 2px !important;
+    }
+
+    #emojiPanel {
+      left: 6px !important;
+      right: 6px !important;
+      width: auto !important;
+      bottom: calc(64px + env(safe-area-inset-bottom)) !important;
+      border-radius: 12px !important;
+      max-height: 58dvh !important;
+    }
+    #emojiPanel > div:first-child .emoji-panel-tab {
+      padding: 9px 8px !important;
+      font-size: 17px !important;
+    }
+    #emojiSearchBar {
+      padding: 8px 8px !important;
+    }
+    #emojiSearchBar input {
+      min-height: 34px !important;
+      font-size: 13px !important;
+    }
+    #gifSearchBar {
+      display: none !important;
+    }
+    #emojiPanelContent {
+      height: auto !important;
+      max-height: 42dvh !important;
+      padding: 8px !important;
+    }
+    .sticker-grid {
+      grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+      gap: 6px !important;
+    }
+    .sticker-btn {
+      width: 100% !important;
+      aspect-ratio: 1 / 1 !important;
+      height: auto !important;
+      min-height: 62px !important;
+      border-radius: 10px !important;
+    }
+    .gif-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+      gap: 6px !important;
+    }
+
+    #tab-sticker-editor .settings-section {
+      padding: 10px !important;
+    }
+    #tab-sticker-editor #stickerCanvasWrap {
+      width: min(100%, 300px) !important;
+      max-width: 100% !important;
+      margin: 0 auto !important;
+      display: block !important;
+    }
+    #tab-sticker-editor #stickerCanvas {
+      width: min(100%, 300px) !important;
+      height: auto !important;
+      max-width: 100% !important;
+      touch-action: none !important;
+    }
+    #tab-sticker-editor .sticker-tool,
+    #tab-sticker-editor .font-option {
+      min-height: 34px !important;
+      padding: 6px 8px !important;
+      font-size: 12px !important;
+      border-radius: 10px !important;
+    }
+    #tab-sticker-editor #myStickerList {
+      gap: 6px !important;
+    }
+  }
   
   /* ===== 2. RESET + BASE ===== */
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -7908,3 +8272,341 @@ body.center {
       bottom: -6px !important;
     }
   }
+
+/* ===== 30. ABSOLUTE FINAL MOBILE FIXES (2026-03-07 fix5) ===== */
+@media (max-width: 900px) {
+  /* 1) Search position: lower by ~25px, reduce space below by ~25px */
+  .sidebar .discover-search,
+  .sidebar .search-box.discover-search {
+    margin-top: 25px !important;
+    margin-bottom: -25px !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+  }
+  .sidebar .discover-strip,
+  .sidebar.stories-focus-mode .discover-strip {
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    gap: 2px !important;
+  }
+  .sidebar .discover-search #searchUser {
+    height: 32px !important;
+    min-height: 32px !important;
+    line-height: 32px !important;
+    margin: 0 !important;
+    padding: 2px 12px 2px 36px !important;
+  }
+
+  /* 2) Keep emojis/GIF fully inside emoji panel */
+  #emojiPanel {
+    overflow: hidden !important;
+  }
+  #emojiPanelContent {
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    max-width: 100% !important;
+  }
+  .emoji-grid,
+  .gif-grid,
+  .sticker-grid {
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+  }
+  .gif-item,
+  .sticker-btn,
+  .emoji-btn {
+    min-width: 0 !important;
+  }
+  .gif-item img {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: cover !important;
+  }
+
+  /* 5) Input bar must always be above keyboard */
+  body.keyboard-open .chat-area.active-mobile #input-area {
+    position: fixed !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: calc(var(--vk-bottom, 0px) + 6px) !important;
+    z-index: 12190 !important;
+  }
+  body.keyboard-open .chat-area.active-mobile #messages {
+    padding-bottom: calc(106px + var(--vk-bottom, 0px) + env(safe-area-inset-bottom)) !important;
+  }
+}
+
+/* ===== 32. ABSOLUTE FINAL MOBILE FIXES (2026-03-07 fix6) ===== */
+@media (max-width: 900px) {
+  /* 1) Repeat search positioning tweak */
+  .sidebar .discover-search,
+  .sidebar .search-box.discover-search {
+    margin-top: 25px !important;
+    margin-bottom: -25px !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+  }
+  .sidebar .discover-strip,
+  .sidebar.stories-focus-mode .discover-strip {
+    gap: 2px !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+  }
+
+  /* 2) Keep inside bounds but still allow full horizontal reach */
+  #emojiPanel {
+    overflow: hidden !important;
+  }
+  #emojiPanelContent {
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    padding: 8px 8px 10px !important;
+    box-sizing: border-box !important;
+  }
+  .sticker-pack-list {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    padding-right: 22px !important;
+    scroll-padding-right: 22px !important;
+    box-sizing: border-box !important;
+  }
+  .sticker-pack-list::after {
+    content: "";
+    display: inline-block;
+    flex: 0 0 22px;
+    width: 22px;
+    height: 1px;
+  }
+  .emoji-grid,
+  .gif-grid,
+  .sticker-grid {
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+  }
+  .gif-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .gif-item,
+  .sticker-btn,
+  .emoji-btn { min-width: 0 !important; }
+
+  /* 5) Raise message input bar higher while typing */
+  body.keyboard-open .chat-area.active-mobile #input-area {
+    position: fixed !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: calc(var(--vk-bottom, 0px) + 24px) !important;
+    z-index: 12220 !important;
+  }
+  body.keyboard-open .chat-area.active-mobile #messages {
+    padding-bottom: calc(128px + var(--vk-bottom, 0px) + env(safe-area-inset-bottom)) !important;
+  }
+}
+
+/* ===== 33. HARD MOBILE OVERRIDE (2026-03-07 fix7) ===== */
+@media (max-width: 900px) {
+  /* 1) repeat: search lower + less bottom gap */
+  .sidebar .discover-search,
+  .sidebar .search-box.discover-search {
+    margin-top: 25px !important;
+    margin-bottom: -25px !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+  }
+
+  /* 2) keep content inside emoji window and still allow full end-scroll */
+  #emojiPanel {
+    overflow: hidden !important;
+    max-width: calc(100vw - 12px) !important;
+  }
+  #emojiPanelContent {
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    padding: 8px !important;
+    box-sizing: border-box !important;
+  }
+  .emoji-grid,
+  .gif-grid,
+  .sticker-grid {
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+  }
+  .sticker-pack-list {
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    padding: 0 28px 6px 0 !important;
+    margin: 0 !important;
+    box-sizing: border-box !important;
+    scroll-padding-right: 28px !important;
+  }
+  .sticker-pack-list .sticker-pack-chip {
+    flex: 0 0 auto !important;
+  }
+  .sticker-pack-list::after {
+    content: "";
+    flex: 0 0 28px;
+    width: 28px;
+    height: 1px;
+  }
+
+  /* 5) composer must rise fully above keyboard while typing */
+  body.composer-keyboard-active .chat-area.active-mobile #input-area,
+  body.keyboard-open .chat-area.active-mobile #input-area {
+    position: fixed !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: calc(var(--vk-bottom, 0px) + 34px) !important;
+    z-index: 12260 !important;
+  }
+  body.composer-keyboard-active .chat-area.active-mobile #messages,
+  body.keyboard-open .chat-area.active-mobile #messages {
+    padding-bottom: calc(144px + var(--vk-bottom, 0px) + env(safe-area-inset-bottom)) !important;
+  }
+}
+
+/* ===== 34. FINAL USER HOTFIX (2026-03-07 fix8) ===== */
+@media (max-width: 900px) {
+  /* 1) Search lower again + same bottom reduction */
+  .sidebar .discover-search,
+  .sidebar .search-box.discover-search {
+    margin-top: 35px !important;
+    margin-bottom: -35px !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+  }
+
+  /* 2) Emoji block smaller than main area, no clipping outside */
+  #emojiPanel {
+    width: min(360px, 92vw) !important;
+    left: 50% !important;
+    right: auto !important;
+    transform: translateX(-50%) !important;
+    bottom: calc(84px + env(safe-area-inset-bottom)) !important;
+    max-height: 44dvh !important;
+    overflow: hidden !important;
+    z-index: 12300 !important;
+  }
+  #emojiPanelContent {
+    max-height: 30dvh !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    padding: 8px !important;
+    box-sizing: border-box !important;
+  }
+  .emoji-grid { grid-template-columns: repeat(7, minmax(0, 1fr)) !important; }
+  .emoji-btn {
+    width: 100% !important;
+    height: auto !important;
+    aspect-ratio: 1 / 1 !important;
+    font-size: 20px !important;
+  }
+  .gif-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .gif-item { border-radius: 10px !important; overflow: hidden !important; }
+
+  /* 5) Telegram-like composer raise on keyboard */
+  body.keyboard-open .chat-area.active-mobile #input-area {
+    position: fixed !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: calc(var(--vk-bottom, 0px) + 10px) !important;
+    z-index: 12320 !important;
+  }
+  body.keyboard-open .chat-area.active-mobile #messages {
+    padding-bottom: calc(112px + var(--vk-bottom, 0px) + env(safe-area-inset-bottom)) !important;
+  }
+}
+
+/* ===== 35. USER TWEAK PASS (2026-03-07 fix9) ===== */
+@media (max-width: 900px) {
+  /* 1) Search a bit lower again */
+  .sidebar .discover-search,
+  .sidebar .search-box.discover-search {
+    margin-top: 45px !important;
+    margin-bottom: -45px !important;
+  }
+
+  /* 2) Restore panel size, add safe bottom space in scroll so last row is visible */
+  #emojiPanel {
+    width: min(480px, 95vw) !important;
+    max-height: 58dvh !important;
+    bottom: calc(72px + env(safe-area-inset-bottom)) !important;
+  }
+  #emojiPanelContent {
+    max-height: 42dvh !important;
+    padding: 8px 8px calc(22px + env(safe-area-inset-bottom)) 8px !important;
+    scroll-padding-bottom: calc(22px + env(safe-area-inset-bottom)) !important;
+  }
+  .emoji-grid,
+  .gif-grid,
+  .sticker-grid {
+    padding-bottom: 8px !important;
+  }
+
+  /* 5) Put composer lower: almost right above keyboard */
+  body.keyboard-open .chat-area.active-mobile #input-area {
+    bottom: calc(var(--vk-bottom, 0px) + 2px) !important;
+    z-index: 12320 !important;
+  }
+  body.keyboard-open .chat-area.active-mobile #messages {
+    padding-bottom: calc(96px + var(--vk-bottom, 0px) + env(safe-area-inset-bottom)) !important;
+  }
+}
+
+/* ===== 36. KEYBOARD TIGHT ALIGN (2026-03-07 fix10) ===== */
+@media (max-width: 900px) {
+  body.keyboard-open .chat-area.active-mobile #input-area {
+    bottom: calc(var(--vk-bottom, 0px) + env(safe-area-inset-bottom)) !important;
+  }
+  body.keyboard-open .chat-area.active-mobile #messages {
+    padding-bottom: calc(86px + var(--vk-bottom, 0px) + env(safe-area-inset-bottom)) !important;
+  }
+}
+
+/* ===== 37. COMPOSER HALF-HEIGHT LIFT (2026-03-07 fix11) ===== */
+@media (max-width: 900px) {
+  body.keyboard-open .chat-area.active-mobile #input-area {
+    bottom: calc(var(--vk-bottom, 0px) + env(safe-area-inset-bottom) + 28px) !important;
+  }
+  body.keyboard-open .chat-area.active-mobile #messages {
+    padding-bottom: calc(114px + var(--vk-bottom, 0px) + env(safe-area-inset-bottom)) !important;
+  }
+}
+
+/* ===== 38. FORCE COMPOSER LIFT (2026-03-07 fix12) ===== */
+@media (max-width: 900px) {
+  body.keyboard-open .chat-area.active-mobile #input-area,
+  body.composer-force-up .chat-area.active-mobile #input-area {
+    position: fixed !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: calc(var(--vk-bottom, 0px) + env(safe-area-inset-bottom) + 44px) !important;
+    z-index: 12440 !important;
+  }
+
+  body.keyboard-open .chat-area.active-mobile #messages,
+  body.composer-force-up .chat-area.active-mobile #messages {
+    padding-bottom: calc(134px + var(--vk-bottom, 0px) + env(safe-area-inset-bottom)) !important;
+  }
+}
+
+/* ===== 39. COMPOSER LOWER HALF STEP (2026-03-07 fix13) ===== */
+@media (max-width: 900px) {
+  body.keyboard-open .chat-area.active-mobile #input-area,
+  body.composer-force-up .chat-area.active-mobile #input-area {
+    bottom: calc(var(--vk-bottom, 0px) + env(safe-area-inset-bottom) + 22px) !important;
+  }
+
+  body.keyboard-open .chat-area.active-mobile #messages,
+  body.composer-force-up .chat-area.active-mobile #messages {
+    padding-bottom: calc(112px + var(--vk-bottom, 0px) + env(safe-area-inset-bottom)) !important;
+  }
+}

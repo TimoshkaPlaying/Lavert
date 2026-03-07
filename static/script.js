@@ -449,15 +449,13 @@ function renderChatPins() {
     ));
     _chatPinCursor[chatId] = idx;
     const p = list[idx];
-    const text = (p.preview || 'Закрепленное сообщение').replace(/</g, '&lt;');
-    const sender = String(p?.sender || '').trim();
-    const senderLabel = sender ? `@${sender}` : 'Система';
+    const text = (getCompactPinPreviewText(p) || 'Сообщение').replace(/</g, '&lt;');
     bar.style.display = 'flex';
     bar.innerHTML = `
         <div class="chat-pinned-main" id="chatPinPrimary">
             <div class="chat-pinned-icon">📌</div>
             <div class="chat-pinned-texts">
-                <div class="chat-pinned-title">${`Закрепленное сообщение • ${senderLabel}`.replace(/</g, '&lt;')} • ${idx + 1}/${list.length}</div>
+                <div class="chat-pinned-title">${idx + 1}/${list.length}</div>
                 <div class="chat-pinned-snippet">${text}</div>
             </div>
         </div>
@@ -503,6 +501,17 @@ function renderChatPins() {
         _chatPinHidden[chatId] = true;
         renderChatPins();
     });
+}
+
+function getCompactPinPreviewText(pin) {
+    const raw = String(pin?.preview || pin?.text || '').trim();
+    const low = raw.toLowerCase();
+    if (!raw) return 'Сообщение';
+    if (low.includes('голос') || low.includes('voice')) return 'Файл';
+    if (low.includes('файл') || low.includes('file')) return 'Файл';
+    if (low.includes('видео') || low.includes('video') || low.includes('круж')) return 'Медиа';
+    if (low.includes('изображ') || low.includes('фото') || low.includes('image') || low.includes('gif')) return 'Медиа';
+    return raw;
 }
 
 function bindChatPinsScrollTracking() {
@@ -1661,6 +1670,7 @@ function renderSearchResult(item, container) {
  * ==========================================
  */
 window.openChat = async (targetId) => {
+    closeEmojiPanel();
     const chatHeader = document.getElementById("chatHeader");
     const messagesContainer = document.getElementById("messages");
     const inputArea = document.getElementById("input-area");
@@ -1760,6 +1770,7 @@ window.onChatHeaderClick = () => {
 // ─── Мобильная навигация ───────────────────────────────────────
 const MOBILE_BREAKPOINT = 900;
 function isMobile() { return window.innerWidth <= MOBILE_BREAKPOINT; }
+let _baseViewportHeight = Math.max(window.innerHeight || 0, document.documentElement?.clientHeight || 0);
 
 const TELEGRAM_MIC_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3zm5-3a1 1 0 0 1 2 0 7 7 0 0 1-6 6.92V22h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-3.08A7 7 0 0 1 5 12a1 1 0 1 1 2 0 5 5 0 1 0 10 0z"/></svg>`;
 const TELEGRAM_VIDEO_NOTE_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 1 0 18a9 9 0 0 1 0-18zm0 3.2a5.8 5.8 0 1 0 0 11.6a5.8 5.8 0 0 0 0-11.6z"/></svg>`;
@@ -1831,8 +1842,35 @@ function updateAppViewportHeight() {
     const h = Math.max(320, Math.round(vv ? vv.height : window.innerHeight));
     document.documentElement.style.setProperty('--app-height', `${h}px`);
     const delta = vv ? Math.max(0, Math.round((window.innerHeight - vv.height - (vv.offsetTop || 0)))) : 0;
+    const vkBottom = vv ? Math.max(0, Math.round(window.innerHeight - (vv.offsetTop + vv.height))) : 0;
+    const vvVisible = vv ? Math.round(vv.height + (vv.offsetTop || 0)) : Math.round(window.innerHeight);
+    _baseViewportHeight = Math.max(_baseViewportHeight, vvVisible, Math.round(window.innerHeight));
+    const effectiveKeyboardOffset = Math.max(delta, vkBottom);
     document.documentElement.style.setProperty('--vk-offset', `${delta}px`);
-    document.body.classList.toggle('keyboard-open', isMobile() && delta > 80);
+    document.documentElement.style.setProperty('--input-kb-offset', `${Math.max(0, delta)}px`);
+    document.documentElement.style.setProperty('--vk-bottom', `${effectiveKeyboardOffset}px`);
+    const keyboardOpen = isMobile() && effectiveKeyboardOffset > 64;
+    document.body.classList.toggle('keyboard-open', keyboardOpen);
+    document.body.classList.remove('composer-keyboard-active');
+}
+
+function ensureFocusedFieldVisible(el) {
+    if (!el || !isMobile()) return;
+    const vv = window.visualViewport;
+    const viewH = vv ? vv.height : window.innerHeight;
+    const rect = el.getBoundingClientRect();
+    const targetBottom = viewH - 10;
+    const overlap = rect.bottom - targetBottom;
+    if (overlap <= 0) return;
+    const scroller = el.closest('.settings-content, .help-main, .tab, .card, .settings-tab, #emojiPanelContent, .chat-area, .sidebar, .story-editor-shell');
+    const shift = overlap + 26;
+    try {
+        if (scroller && typeof scroller.scrollBy === 'function') {
+            scroller.scrollBy({ top: shift, behavior: 'smooth' });
+        } else {
+            window.scrollBy({ top: shift, behavior: 'smooth' });
+        }
+    } catch {}
 }
 
 function initMobileViewportBehavior() {
@@ -1845,6 +1883,7 @@ function initMobileViewportBehavior() {
     const input = document.getElementById('messageInput');
     if (input) {
         input.addEventListener('focus', () => {
+            if (isMobile()) document.body.classList.add('composer-force-up');
             setTimeout(() => {
                 updateAppViewportHeight();
                 scrollChatToBottom();
@@ -1854,8 +1893,77 @@ function initMobileViewportBehavior() {
             setTimeout(() => {
                 document.body.classList.remove('keyboard-open');
                 document.documentElement.style.setProperty('--vk-offset', '0px');
+                document.documentElement.style.setProperty('--vk-bottom', '0px');
+                document.body.classList.remove('composer-force-up');
             }, 140);
         }, { passive: true });
+    }
+
+    // Для экранов входа/регистрации и прочих форм: держим активное поле над клавиатурой.
+    const formInputs = Array.from(document.querySelectorAll('input, textarea')).filter((el) => {
+        if (!el || el.id === 'messageInput') return false;
+        if (el.type === 'hidden' || el.disabled) return false;
+        return true;
+    });
+    formInputs.forEach((el) => {
+        el.addEventListener('focus', () => {
+            setTimeout(() => {
+                updateAppViewportHeight();
+                try {
+                    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                } catch {}
+                ensureFocusedFieldVisible(el);
+            }, 140);
+        }, { passive: true });
+    });
+
+    document.addEventListener('focusin', (e) => {
+        const t = e.target;
+        if (!(t instanceof HTMLElement)) return;
+        const isField = t.matches('input, textarea, [contenteditable="true"]');
+        if (!isField) return;
+        setTimeout(() => {
+            updateAppViewportHeight();
+            ensureFocusedFieldVisible(t);
+        }, 90);
+        setTimeout(() => ensureFocusedFieldVisible(t), 220);
+    }, { passive: true });
+
+    if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', () => {
+            const active = document.activeElement;
+            if (active instanceof HTMLElement && active.matches('input, textarea, [contenteditable="true"]')) {
+                ensureFocusedFieldVisible(active);
+            }
+        }, { passive: true });
+    }
+}
+
+function enforceMobileSearchLayout() {
+    if (!isMobile()) return;
+    const sidebar = document.querySelector('.sidebar');
+    const searchWrap = document.querySelector('.sidebar .discover-search');
+    const strip = document.querySelector('.sidebar .discover-strip');
+    const input = document.getElementById('searchUser');
+    if (sidebar) {
+        sidebar.style.paddingTop = '2px';
+    }
+    if (searchWrap) {
+        searchWrap.style.marginTop = '35px';
+        searchWrap.style.marginBottom = '-35px';
+        searchWrap.style.paddingTop = '0';
+        searchWrap.style.paddingBottom = '0';
+    }
+    if (strip) {
+        strip.style.gap = '2px';
+        strip.style.paddingTop = '0';
+        strip.style.paddingBottom = '0';
+    }
+    if (input) {
+        input.style.height = '32px';
+        input.style.minHeight = '32px';
+        input.style.lineHeight = '32px';
+        input.style.margin = '0';
     }
 }
 
@@ -1901,6 +2009,7 @@ window.openChat = async function(targetId) {
 
 window.goBackToChats = function(e) {
     if (e?.stopPropagation) e.stopPropagation();
+    closeEmojiPanel();
     document.querySelector('.sidebar').classList.remove('hidden-mobile');
     document.getElementById('folderBar')?.classList.remove('hidden-mobile');
     document.getElementById('chatArea').classList.remove('active-mobile');
@@ -5165,8 +5274,13 @@ window.switchSettingsTab = (tabName) => {
     });
     
     // Показываем нужную
-    document.getElementById(`tab-${tabName}`).style.display = 'block';
-    document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
+    const targetTab = document.getElementById(`tab-${tabName}`);
+    if (targetTab) targetTab.style.display = 'block';
+    document.querySelector(`[data-tab="${tabName}"]`)?.classList.add('active');
+
+    const settingsContent = document.querySelector('#settingsModal .settings-content');
+    if (settingsContent) settingsContent.scrollTop = 0;
+    if (targetTab) targetTab.scrollTop = 0;
 };
 
 // Обработчики кликов по навигации
@@ -5543,14 +5657,11 @@ async function loadPinnedForChat(targetElId, chatPeer) {
         pins.forEach((p) => {
             const row = document.createElement('div');
             row.className = 'info-file-item';
-            const sender = String(p.sender || '').trim();
-            const senderLabel = sender ? `@${sender}` : 'Система';
-            const title = `Закрепленное сообщение • ${senderLabel}`;
+            const title = `📌 ${getCompactPinPreviewText(p)}`;
             row.innerHTML = `
                 <div class="info-file-icon">📌</div>
                 <div style="display:flex;flex-direction:column;min-width:0;gap:2px;">
-                    <div style="font-size:11px;color:var(--text-dim);font-weight:700;">${title.replace(/</g, '&lt;')}</div>
-                    <div class="info-file-name">${String(p.preview || 'Сообщение').replace(/</g, '&lt;')}</div>
+                    <div class="info-file-name">${title.replace(/</g, '&lt;')}</div>
                 </div>
                 <button class="btn-user-action danger" style="margin-left:auto;padding:4px 8px;font-size:11px;">Открепить</button>
             `;
@@ -5586,6 +5697,7 @@ async function loadPinnedForChat(targetElId, chatPeer) {
 async function loadUserMedia(targetUsername) {
     const mediaGrid = document.getElementById('infoMediaGrid');
     const filesList = document.getElementById('infoFilesList');
+    if (!mediaGrid || !filesList) return;
     mediaGrid.innerHTML = '<div style="color:var(--text-dim);font-size:13px;padding:10px;grid-column:span 3;text-align:center;">Загрузка...</div>';
     filesList.innerHTML = '';
 
@@ -5594,21 +5706,60 @@ async function loadUserMedia(targetUsername) {
         const history = await res.json();
 
         const chatId = [username, targetUsername].sort().join('_');
-        const aesKey = sessionAESKeys[chatId] || sessionAESKeys[targetUsername];
-        if (!aesKey) { mediaGrid.innerHTML = ''; return; }
+        let aesKey = sessionAESKeys[chatId] || sessionAESKeys[targetUsername];
+        if (!aesKey && String(window.currentChat || '').toLowerCase() === String(targetUsername || '').toLowerCase() && window.currentAES) {
+            aesKey = window.currentAES;
+            sessionAESKeys[chatId] = aesKey;
+        }
+        if (!aesKey) {
+            try {
+                aesKey = await getAESKeyForPeer(targetUsername);
+                if (aesKey) sessionAESKeys[chatId] = aesKey;
+            } catch {}
+        }
+        if (!aesKey) {
+            mediaGrid.innerHTML = '<div class="empty-state-note empty-state-note-grid">Нет доступа к ключу</div>';
+            filesList.innerHTML = '<div class="empty-state-note">Нет доступа к ключу</div>';
+            return;
+        }
+
+        const normalizeFileData = (raw) => {
+            if (!raw || typeof raw !== 'object') return null;
+            const url = String(
+                raw.url || raw.path || raw.fileUrl || raw.file_url ||
+                raw.file?.url || raw.file?.path || ''
+            ).trim();
+            const fileKey = String(
+                raw.file_key || raw.key || raw.fileKey ||
+                raw.file?.key || raw.file?.file_key || ''
+            ).trim();
+            if (!url || !fileKey) return null;
+            return {
+                ...raw,
+                url,
+                file_key: fileKey,
+                name: String(raw.name || raw.filename || 'file'),
+                type: String(raw.type || raw.media_kind || 'file').toLowerCase(),
+                mime: String(raw.mime || raw.file?.mime || '').trim()
+            };
+        };
 
         const mediaItems = [];
         const fileItems = [];
 
-        for (const packet of history) {
+        for (const packet of (Array.isArray(history) ? history : [])) {
             try {
                 const text = await cryptoMod.decrypt(aesKey, packet.cipher);
                 if (text.startsWith('__FILE__')) {
-                    const data = JSON.parse(text.replace('__FILE__', ''));
+                    const data = normalizeFileData(JSON.parse(text.replace('__FILE__', '')));
+                    if (!data) continue;
                     const t = String(data.type || '').toLowerCase();
-                    if (t === 'image' || t === 'video' || t === 'video_note') {
+                    const m = String(data.mime || '').toLowerCase();
+                    const isImageLike = t === 'image' || m.startsWith('image/');
+                    const isVideoLike = t === 'video' || t === 'video_note' || m.startsWith('video/');
+                    if (isImageLike || isVideoLike) {
                         mediaItems.push(data);
-                    } else if (t !== 'voice') {
+                    } else {
                         fileItems.push(data);
                     }
                 }
@@ -5653,6 +5804,7 @@ async function loadUserMedia(targetUsername) {
         }
     } catch(e) {
         mediaGrid.innerHTML = '<div class="empty-state-note empty-state-note-grid">Ошибка загрузки</div>';
+        filesList.innerHTML = '<div class="empty-state-note">Ошибка загрузки</div>';
     }
 }
 
@@ -9152,22 +9304,22 @@ const EMOJI_CATEGORIES = {
 };
 
 const BUILT_IN_STICKERS = [
-    { id:'s1', emoji:'👍', label:'Класс' },
-    { id:'s2', emoji:'❤️', label:'Сердце' },
-    { id:'s3', emoji:'😂', label:'Смех' },
-    { id:'s4', emoji:'😢', label:'Грусть' },
-    { id:'s5', emoji:'😡', label:'Злость' },
-    { id:'s6', emoji:'🤩', label:'Вау' },
-    { id:'s7', emoji:'🎉', label:'Ура' },
-    { id:'s8', emoji:'🙏', label:'Спасибо' },
-    { id:'s9', emoji:'💪', label:'Сила' },
-    { id:'s10', emoji:'👀', label:'Смотрю' },
-    { id:'s11', emoji:'🔥', label:'Огонь' },
-    { id:'s12', emoji:'💯', label:'Сотка' },
-    { id:'s13', emoji:'🎭', label:'Театр' },
-    { id:'s14', emoji:'🌚', label:'Ночь' },
-    { id:'s15', emoji:'🐸', label:'Лягух' },
-    { id:'s16', emoji:'🦆', label:'Утка' },
+    { id:'e1', emoji:'😺', label:'кот привет', type:'emoji' },
+    { id:'e2', emoji:'🐶', label:'пёс', type:'emoji' },
+    { id:'e3', emoji:'🐾', label:'лапки', type:'emoji' },
+    { id:'e4', emoji:'🫶', label:'обнимашки', type:'emoji' },
+    { id:'e5', emoji:'🤩', label:'вау', type:'emoji' },
+    { id:'e6', emoji:'🥳', label:'ура', type:'emoji' },
+    { id:'e7', emoji:'😂', label:'смех', type:'emoji' },
+    { id:'e8', emoji:'😎', label:'круто', type:'emoji' },
+    { id:'e9', emoji:'😍', label:'любовь', type:'emoji' },
+    { id:'e10', emoji:'🔥', label:'огонь', type:'emoji' },
+    { id:'e11', emoji:'💯', label:'супер', type:'emoji' },
+    { id:'e12', emoji:'👍', label:'ок', type:'emoji' },
+    { id:'e13', emoji:'🤝', label:'согласен', type:'emoji' },
+    { id:'e14', emoji:'🎉', label:'праздник', type:'emoji' },
+    { id:'e15', emoji:'💖', label:'милота', type:'emoji' },
+    { id:'e16', emoji:'✨', label:'блеск', type:'emoji' },
 ];
 
 const STICKER_PACKS_KEY = () => `levart_sticker_packs_${username}`;
@@ -9251,6 +9403,42 @@ function getUserStickers() {
     return Array.isArray(mine?.stickers) ? mine.stickers : [];
 }
 
+function resetScrollToStart(root) {
+    if (!root) return;
+    root.scrollTop = 0;
+    root.scrollLeft = 0;
+}
+
+function enableHorizontalDragScroll(el) {
+    if (!el || el.dataset.dragScrollInit === '1') return;
+    el.dataset.dragScrollInit = '1';
+    let startX = 0;
+    let startLeft = 0;
+    let dragging = false;
+    const onDown = (ev) => {
+        if ((ev.pointerType === 'mouse' || ev.pointerType === 'pen') && ev.button !== 0) return;
+        dragging = true;
+        startX = ev.clientX;
+        startLeft = el.scrollLeft;
+        el.classList.add('dragging');
+        try { el.setPointerCapture(ev.pointerId); } catch {}
+    };
+    const onMove = (ev) => {
+        if (!dragging) return;
+        const dx = ev.clientX - startX;
+        el.scrollLeft = startLeft - dx;
+    };
+    const onUp = (ev) => {
+        dragging = false;
+        el.classList.remove('dragging');
+        try { el.releasePointerCapture(ev.pointerId); } catch {}
+    };
+    el.addEventListener('pointerdown', onDown, { passive: true });
+    el.addEventListener('pointermove', onMove, { passive: true });
+    el.addEventListener('pointerup', onUp, { passive: true });
+    el.addEventListener('pointercancel', onUp, { passive: true });
+}
+
 function getStickersForActivePack() {
     const packs = getStickerPacks();
     if (_activeStickerPack === 'all') return packs.flatMap((p) => p.stickers || []);
@@ -9291,6 +9479,8 @@ window.toggleEmojiPanel = () => {
         }
         panel.style.display = 'block';
         panel.dataset.open  = '1';
+        const content = document.getElementById('emojiPanelContent');
+        if (content) resetScrollToStart(content);
         renderEmojiTab();
         // Закрываем attach menu
         document.getElementById('attachMenu')?.classList.remove('active');
@@ -9300,21 +9490,21 @@ window.toggleEmojiPanel = () => {
     }
 };
 
-window.closeEmojiPanel = () => {
+function closeEmojiPanel() {
     const p = document.getElementById('emojiPanel');
     if (p) { p.style.display = 'none'; p.dataset.open = '0'; }
-};
+}
+window.closeEmojiPanel = closeEmojiPanel;
 
 
 window.switchEmojiTab = (tab, btn) => {
     document.querySelectorAll('.emoji-panel-tab').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
-    const gifBar = document.getElementById('gifSearchBar');
-    if (gifBar) gifBar.style.display = tab === 'gif' ? 'block' : 'none';
     _mediaSearchQuery = (document.getElementById('emojiSearchInput')?.value || '').trim().toLowerCase();
     if (tab === 'emoji')    renderEmojiTab();
     if (tab === 'stickers') renderStickersTab();
     if (tab === 'gif')      renderGifTab();
+    resetScrollToStart(document.getElementById('emojiPanelContent'));
 };
 
 function renderEmojiTab() {
@@ -9369,7 +9559,25 @@ function renderStickersTab() {
         chip.onclick = () => { _activeStickerPack = p.id; renderStickersTab(); };
         chips.appendChild(chip);
     });
+    const chipsTail = document.createElement('span');
+    chipsTail.style.cssText = 'display:inline-block;width:14px;flex:0 0 14px;height:1px;';
+    chips.appendChild(chipsTail);
     content.appendChild(chips);
+    resetScrollToStart(chips);
+    enableHorizontalDragScroll(chips);
+
+    const actions = document.createElement('div');
+    actions.style.cssText = 'display:flex;gap:6px;overflow-x:auto;padding:0 0 6px 0;margin:0 0 4px 0;';
+    const addGifBtn = document.createElement('button');
+    addGifBtn.className = 'sticker-pack-chip';
+    addGifBtn.textContent = '🎞️ Загрузить GIF';
+    addGifBtn.onclick = () => document.getElementById('emojiGifUploadInput')?.click();
+    actions.appendChild(addGifBtn);
+    const actionsTail = document.createElement('span');
+    actionsTail.style.cssText = 'display:inline-block;width:14px;flex:0 0 14px;height:1px;';
+    actions.appendChild(actionsTail);
+    enableHorizontalDragScroll(actions);
+    content.appendChild(actions);
 
     const userStickers = getStickersForActivePack().filter((s) => stickerMatchesQuery(s, q));
     if (userStickers.length > 0) {
@@ -9401,33 +9609,59 @@ function renderStickersTab() {
     }
 
     // Встроенные
-    const header = document.createElement('div');
-    header.className = 'emoji-category-header';
-    header.textContent = '🎭 Стикеры Levart';
-    content.appendChild(header);
-
-    const grid = document.createElement('div');
-    grid.className = 'sticker-grid';
-    BUILT_IN_STICKERS.filter((s) => stickerMatchesQuery(s, q)).forEach(s => {
-        const btn = document.createElement('button');
-        btn.className = 'sticker-btn';
-        btn.textContent = s.emoji;
-        btn.onclick = () => sendStickerMessage({ type: 'sticker', emoji: s.emoji, label: s.label });
-        grid.appendChild(btn);
-    });
-    content.appendChild(grid);
+    const filteredBuiltins = BUILT_IN_STICKERS.filter((s) => stickerMatchesQuery(s, q));
+    const renderBuiltInPack = (title, list) => {
+        if (!list.length) return;
+        const header = document.createElement('div');
+        header.className = 'emoji-category-header';
+        header.textContent = title;
+        content.appendChild(header);
+        const grid = document.createElement('div');
+        grid.className = 'sticker-grid';
+        list.forEach((s) => {
+            const btn = document.createElement('button');
+            btn.className = 'sticker-btn';
+            btn.style.fontSize = '0';
+            if (s.src) {
+                const img = document.createElement('img');
+                img.src = s.src;
+                img.alt = s.label || 'sticker';
+                img.style.cssText = 'width:100%;height:100%;object-fit:contain;border-radius:8px;';
+                btn.appendChild(img);
+            } else {
+                btn.textContent = s.emoji || '🎭';
+                btn.style.fontSize = '28px';
+            }
+            btn.onclick = () => sendStickerMessage({ ...s, type: String(s.type || 'gif') });
+            grid.appendChild(btn);
+        });
+        content.appendChild(grid);
+    };
+    renderBuiltInPack('🎭 Стикеры Levart', filteredBuiltins);
 }
 
 // Пустые GIF (без внешнего API)
 const SAMPLE_GIFS = [
-    { id:'g1', url:'https://media.giphy.com/media/LmNwrBhejkK9EFP504/giphy.gif', title:'привет' },
-    { id:'g2', url:'https://media.giphy.com/media/3oKIPsx2VAYAgEHC12/giphy.gif', title:'ок' },
-    { id:'g3', url:'https://media.giphy.com/media/XreQmk7ETCak0/giphy.gif', title:'лол' },
-    { id:'g4', url:'https://media.giphy.com/media/26ufdipQqU2lhNA4g/giphy.gif', title:'ура' },
-    { id:'g5', url:'https://media.giphy.com/media/pFZTlrO0MV6LoWSDXd/giphy.gif', title:'танец' },
-    { id:'g6', url:'https://media.giphy.com/media/077i6AULCXc0FKTj9s/giphy.gif', title:'нет' },
-    { id:'g7', url:'https://media.giphy.com/media/zcVOyJBHYZvX2/giphy.gif', title:'фейспалм' },
-    { id:'g8', url:'https://media.giphy.com/media/Lny6Rw04nsOOc/giphy.gif', title:'хмм' },
+    { id:'g1',  url:'https://media.giphy.com/media/LmNwrBhejkK9EFP504/giphy.gif', title:'привет' },
+    { id:'g2',  url:'https://media.giphy.com/media/3oKIPsx2VAYAgEHC12/giphy.gif', title:'ок' },
+    { id:'g3',  url:'https://media.giphy.com/media/XreQmk7ETCak0/giphy.gif', title:'лол' },
+    { id:'g4',  url:'https://media.giphy.com/media/26ufdipQqU2lhNA4g/giphy.gif', title:'ура' },
+    { id:'g5',  url:'https://media.giphy.com/media/pFZTlrO0MV6LoWSDXd/giphy.gif', title:'танец' },
+    { id:'g6',  url:'https://media.giphy.com/media/077i6AULCXc0FKTj9s/giphy.gif', title:'нет' },
+    { id:'g7',  url:'https://media.giphy.com/media/zcVOyJBHYZvX2/giphy.gif', title:'фейспалм' },
+    { id:'g8',  url:'https://media.giphy.com/media/Lny6Rw04nsOOc/giphy.gif', title:'хмм' },
+    { id:'g9',  url:'https://media.giphy.com/media/3oEjI6SIIHBdRxXI40/giphy.gif', title:'пока' },
+    { id:'g10', url:'https://media.giphy.com/media/ASd0Ukj0y3qMM/giphy.gif', title:'спасибо' },
+    { id:'g11', url:'https://media.giphy.com/media/9Y5BbDSkSTiY8/giphy.gif', title:'кот' },
+    { id:'g12', url:'https://media.giphy.com/media/13CoXDiaCcCoyk/giphy.gif', title:'собака' },
+    { id:'g13', url:'https://media.giphy.com/media/l0MYt5jPR6QX5pnqM/giphy.gif', title:'обниму' },
+    { id:'g14', url:'https://media.giphy.com/media/l0HlQ7LRalQqdWfao/giphy.gif', title:'шок' },
+    { id:'g15', url:'https://media.giphy.com/media/l4FGuhL4U2WyjdkaY/giphy.gif', title:'милота' },
+    { id:'g16', url:'https://media.giphy.com/media/5xtDarIN81U0KvlnzKo/giphy.gif', title:'успех' },
+    { id:'g17', url:'https://media.giphy.com/media/xT0xeJpnrWC4XWblEk/giphy.gif', title:'смех' },
+    { id:'g18', url:'https://media.giphy.com/media/5VKbvrjxpVJCM/giphy.gif', title:'любовь' },
+    { id:'g19', url:'https://media.giphy.com/media/26gR0YFZxWbnUPtMA/giphy.gif', title:'хайп' },
+    { id:'g20', url:'https://media.giphy.com/media/l0ExncehJzexFpRHq/giphy.gif', title:'норм' },
 ];
 
 window._gifResults = [...SAMPLE_GIFS];
@@ -9436,7 +9670,19 @@ function renderGifTab(gifs) {
     const content = document.getElementById('emojiPanelContent');
     if (!content) return;
     const q = _mediaSearchQuery;
-    const list = (gifs || window._gifResults).filter((g) => !q || String(g.title || '').toLowerCase().includes(q));
+    const baseList = (gifs || window._gifResults || []);
+    const myGifStickers = getStickerPacks()
+        .flatMap((p) => Array.isArray(p.stickers) ? p.stickers : [])
+        .filter((s) => {
+            const src = String(s.src || '').toLowerCase();
+            const t = String(s.type || '').toLowerCase();
+            const byType = t === 'gif' || (Array.isArray(s.frames) && s.frames.length > 1);
+            const bySrc = src.startsWith('data:image/gif') || src.endsWith('.gif');
+            return byType || bySrc;
+        })
+        .map((s, i) => ({ id: `mine_${i}_${s.id || ''}`, url: s.src, title: s.label || s.name || 'мой GIF', _mine: true, _sticker: s }));
+    const list = [...myGifStickers, ...baseList]
+        .filter((g) => !q || String(g.title || '').toLowerCase().includes(q));
     content.innerHTML = '';
 
     if (!list || list.length === 0) {
@@ -9455,12 +9701,17 @@ function renderGifTab(gifs) {
         img.loading = 'lazy';
         item.appendChild(img);
         item.onclick = () => {
-            sendGifMessage(g);
+            if (g._mine && g._sticker) {
+                sendStickerMessage(g._sticker);
+            } else {
+                sendGifMessage(g);
+            }
             closeEmojiPanel();
         };
         grid.appendChild(item);
     });
     content.appendChild(grid);
+    resetScrollToStart(content);
 }
 
 window.searchGifs = (query) => {
@@ -10101,6 +10352,55 @@ window.importImageToCanvas = (e) => {
             _canvasHistory.push(ctx.getImageData(0, 0, canvas.width, canvas.height));
         };
         img.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+};
+
+window.importGifToStickerLibrary = (e) => {
+    const file = e?.target?.files?.[0];
+    if (!file) return;
+    const mime = String(file.type || '').toLowerCase();
+    if (!mime.includes('gif')) {
+        showToast('Нужен GIF файл', 'error');
+        e.target.value = '';
+        return;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+        showToast('GIF слишком большой (макс. 20MB)', 'error');
+        e.target.value = '';
+        return;
+    }
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+        try {
+            const src = String(ev?.target?.result || '').trim();
+            if (!src) throw new Error('empty');
+            const packs = getStickerPacks();
+            let pack = packs.find((p) => p.id === 'mine');
+            if (!pack) {
+                pack = { id: 'mine', title: 'Мои', stickers: [] };
+                packs.unshift(pack);
+            }
+            pack.stickers.unshift({
+                id: `gif_${Date.now()}`,
+                src,
+                type: 'gif',
+                label: file.name.replace(/\.[^.]+$/, '') || 'Мой GIF'
+            });
+            if (pack.stickers.length > 120) pack.stickers.pop();
+            saveStickerPacks(packs);
+            renderStickerPackList();
+            renderStickersTab();
+            showToast('GIF добавлен в стикеры и вкладку GIF');
+        } catch {
+            showToast('Не удалось добавить GIF', 'error');
+        } finally {
+            e.target.value = '';
+        }
+    };
+    reader.onerror = () => {
+        showToast('Ошибка чтения GIF', 'error');
+        e.target.value = '';
     };
     reader.readAsDataURL(file);
 };
@@ -10793,6 +11093,10 @@ async function processInviteJoinFromLink() {
 
 document.addEventListener("DOMContentLoaded", async () => {
     initMobileViewportBehavior();
+    enforceMobileSearchLayout();
+    window.addEventListener('resize', () => {
+        setTimeout(enforceMobileSearchLayout, 40);
+    }, { passive: true });
     initMobileEdgeBackGesture();
     initMobileTapMessageMenu();
     initComposerButtons();

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
     <title>Levart Secure Chat</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260305n">
+    <link rel="stylesheet" href="/static/style.css?v=20260307_fix13">
     <link rel="stylesheet" href="/static/calls.css?v=20260305n">
     <style>
         /* Inline переопределения для быстрой кастомизации темы через Внешний вид */
@@ -640,6 +640,8 @@
                     <button class="font-option" onclick="newStickerFromScratch()">🆕 Новый стикер</button>
                     <button class="font-option" onclick="document.getElementById('stickerImportInput').click()">📁 Загрузить</button>
                     <input type="file" id="stickerImportInput" accept="image/*" style="display:none" onchange="importImageToCanvas(event)">
+                    <button class="font-option" onclick="document.getElementById('stickerGifImportInput').click()">🎞️ GIF в пак</button>
+                    <input type="file" id="stickerGifImportInput" accept="image/gif" style="display:none" onchange="importGifToStickerLibrary(event)">
                 </div>
             </div>
 
@@ -689,16 +691,22 @@
     <div id="emojiSearchBar" style="display:block;padding:10px 12px;border-bottom:1px solid var(--glass-border);">
         <input id="emojiSearchInput" type="text" placeholder="Поиск эмодзи, стикеров, GIF..." style="margin:0;" oninput="searchEmojiStickersGif(this.value)">
     </div>
-    <!-- Поиск GIF -->
-    <div id="gifSearchBar" style="display:none;padding:0 12px 10px;">
-        <input id="gifSearchInput" type="text" placeholder="Поиск GIF..." style="margin:0;" oninput="searchGifs(this.value)">
-    </div>
     <!-- Контент -->
     <div id="emojiPanelContent" style="height:320px;overflow-y:auto;padding:10px;"></div>
 </div>
+<input type="file" id="emojiGifUploadInput" accept="image/gif" style="display:none" onchange="importGifToStickerLibrary(event)">
 
 <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-<script type="module" src="/static/script.js?v=20260305n"></script>
+<script type="module" src="/static/script.js?v=20260307_fix13"></script>
 <script src="/static/calls.js?v=20260305n"></script>
 </body>
 </html>
+
+
+
+
+
+
+
+
+

@@ -28,6 +28,14 @@ let _refreshTimer = null;
 let _activeTab = 'guide';
 let _searchQuery = '';
 
+function closeHelpSidebar() {
+    document.body.classList.remove('help-sidebar-open');
+}
+
+function toggleHelpSidebar() {
+    document.body.classList.toggle('help-sidebar-open');
+}
+
 function setForumStatus(text) {
     const el = document.getElementById('forumStatus');
     if (el) el.textContent = text;
@@ -51,13 +59,20 @@ function switchTab(tab) {
     document.querySelectorAll('.nav-btn').forEach((b) => b.classList.remove('active'));
     document.querySelector(`.nav-btn[data-tab="${tab}"]`)?.classList.add('active');
     document.querySelectorAll('.tab').forEach((s) => s.classList.remove('active'));
-    document.getElementById(`tab-${tab}`)?.classList.add('active');
+    const current = document.getElementById(`tab-${tab}`);
+    current?.classList.add('active');
+    if (current) current.scrollTop = 0;
+    const main = document.querySelector('.help-main');
+    if (main) main.scrollTop = 0;
+    const forumList = document.getElementById('forumList');
+    if (forumList) forumList.scrollTop = 0;
     if (tab === 'forum') {
         loadForum().catch(() => {});
         startForumAutoRefresh();
     } else {
         stopForumAutoRefresh();
     }
+    closeHelpSidebar();
 }
 
 function bindTabs() {
@@ -195,6 +210,8 @@ function stopForumAutoRefresh() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('helpMenuBtn')?.addEventListener('click', toggleHelpSidebar);
+    document.getElementById('helpSidebarBackdrop')?.addEventListener('click', closeHelpSidebar);
     bindTabs();
     document.getElementById('createTopicBtn')?.addEventListener('click', createTopic);
     document.getElementById('forumRefreshBtn')?.addEventListener('click', () => loadForum().catch(() => {}));
