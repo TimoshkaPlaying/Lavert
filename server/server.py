@@ -46,14 +46,29 @@ R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME", "").strip()
 R2_PUBLIC_BASE_URL = os.getenv("R2_PUBLIC_BASE_URL", "").strip().rstrip("/")
 R2_PRESIGN_TTL = int(os.getenv("R2_PRESIGN_TTL", "3600"))
 
+# Backblaze B2 S3-compatible storage config (alternative)
+B2_ENDPOINT = os.getenv("B2_ENDPOINT", "").strip()
+B2_KEY_ID = os.getenv("B2_KEY_ID", "").strip()
+B2_APPLICATION_KEY = os.getenv("B2_APPLICATION_KEY", "").strip()
+B2_BUCKET_NAME = os.getenv("B2_BUCKET_NAME", "").strip()
+B2_PUBLIC_BASE_URL = os.getenv("B2_PUBLIC_BASE_URL", "").strip().rstrip("/")
+B2_PRESIGN_TTL = int(os.getenv("B2_PRESIGN_TTL", "3600"))
+
+STORAGE_ENDPOINT_URL = R2_ENDPOINT_URL or B2_ENDPOINT
+STORAGE_ACCESS_KEY_ID = R2_ACCESS_KEY_ID or B2_KEY_ID
+STORAGE_SECRET_ACCESS_KEY = R2_SECRET_ACCESS_KEY or B2_APPLICATION_KEY
+STORAGE_BUCKET_NAME = R2_BUCKET_NAME or B2_BUCKET_NAME
+STORAGE_PUBLIC_BASE_URL = R2_PUBLIC_BASE_URL or B2_PUBLIC_BASE_URL
+STORAGE_PRESIGN_TTL = R2_PRESIGN_TTL if R2_ENDPOINT_URL else B2_PRESIGN_TTL
+
 _r2_client = None
-if boto3 and R2_ENDPOINT_URL and R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY and R2_BUCKET_NAME:
+if boto3 and STORAGE_ENDPOINT_URL and STORAGE_ACCESS_KEY_ID and STORAGE_SECRET_ACCESS_KEY and STORAGE_BUCKET_NAME:
     try:
         _r2_client = boto3.client(
             "s3",
-            endpoint_url=R2_ENDPOINT_URL,
-            aws_access_key_id=R2_ACCESS_KEY_ID,
-            aws_secret_access_key=R2_SECRET_ACCESS_KEY,
+            endpoint_url=STORAGE_ENDPOINT_URL,
+            aws_access_key_id=STORAGE_ACCESS_KEY_ID,
+            aws_secret_access_key=STORAGE_SECRET_ACCESS_KEY,
             region_name="auto"
         )
     except Exception:
@@ -271,19 +286,19 @@ def _r2_upload_fileobj(fileobj, folder, filename, content_type="application/octe
     key = _r2_object_key(folder, filename)
     _r2_client.upload_fileobj(
         fileobj,
-        R2_BUCKET_NAME,
+        STORAGE_BUCKET_NAME,
         key,
         ExtraArgs={"ContentType": content_type}
     )
     return key
 
 def _r2_signed_or_public_url(key):
-    if R2_PUBLIC_BASE_URL:
-        return f"{R2_PUBLIC_BASE_URL}/{key}"
+    if STORAGE_PUBLIC_BASE_URL:
+        return f"{STORAGE_PUBLIC_BASE_URL}/{key}"
     return _r2_client.generate_presigned_url(
         ClientMethod="get_object",
-        Params={"Bucket": R2_BUCKET_NAME, "Key": key},
-        ExpiresIn=max(60, R2_PRESIGN_TTL)
+        Params={"Bucket": STORAGE_BUCKET_NAME, "Key": key},
+        ExpiresIn=max(60, STORAGE_PRESIGN_TTL)
     )
 
 def emit_to_user(username, event_name, payload, exclude_sid=None):
