@@ -2,6 +2,16 @@ from flask import Flask, request, jsonify, render_template, send_from_directory,
 from flask_socketio import SocketIO, emit
 import json, os, time, uuid, tempfile, subprocess, shutil, logging, sqlite3, threading
 
+try:
+    import psycopg
+except Exception:
+    psycopg = None
+
+try:
+    import boto3
+except Exception:
+    boto3 = None
+
 app = Flask(__name__, template_folder="../templates", static_folder="../static")
 socketio = SocketIO(app, cors_allowed_origins="*")
 app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024 * 1024  # 2GB
@@ -28,6 +38,27 @@ os.makedirs(os.path.join(UPLOAD_FOLDER, 'images'), exist_ok=True)
 os.makedirs(os.path.join(UPLOAD_FOLDER, 'files'),  exist_ok=True)
 os.makedirs(os.path.join(UPLOAD_FOLDER, 'avatars'), exist_ok=True)
 
+# Cloudflare R2 (S3-compatible) storage config
+R2_ENDPOINT_URL = os.getenv("R2_ENDPOINT_URL", "").strip()
+R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID", "").strip()
+R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY", "").strip()
+R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME", "").strip()
+R2_PUBLIC_BASE_URL = os.getenv("R2_PUBLIC_BASE_URL", "").strip().rstrip("/")
+R2_PRESIGN_TTL = int(os.getenv("R2_PRESIGN_TTL", "3600"))
+
+_r2_client = None
+if boto3 and R2_ENDPOINT_URL and R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY and R2_BUCKET_NAME:
+    try:
+        _r2_client = boto3.client(
+            "s3",
+            endpoint_url=R2_ENDPOINT_URL,
+            aws_access_key_id=R2_ACCESS_KEY_ID,
+            aws_secret_access_key=R2_SECRET_ACCESS_KEY,
+            region_name="auto"
+        )
+    except Exception:
+        _r2_client = None
+
 _asr_backend = None
 _asr_model = None
 _sr_backend = None
@@ -38,6 +69,8 @@ def serve_crypto(filename):
 
 # ─── Утилиты ────────────────────────────────────────────────────
 DB_FILE = "app_data.sqlite3"
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+_db_use_postgres = bool(DATABASE_URL and DATABASE_URL.startswith(("postgres://", "postgresql://")) and psycopg)
 _db_init_done = False
 _db_lock = threading.Lock()
 
@@ -50,7 +83,24 @@ def _load_json_file(path):
         except Exception:
             return {}
 
+def _load_json_from_legacy_sqlite(path):
+    if not os.path.exists(DB_FILE):
+        return None
+    try:
+        conn = sqlite3.connect(DB_FILE, timeout=5, check_same_thread=False)
+        try:
+            row = conn.execute("SELECT payload FROM json_store WHERE path = ?", (path,)).fetchone()
+            if not row or not row[0]:
+                return None
+            return json.loads(row[0])
+        finally:
+            conn.close()
+    except Exception:
+        return None
+
 def _db_connect():
+    if _db_use_postgres:
+        return psycopg.connect(DATABASE_URL)
     conn = sqlite3.connect(DB_FILE, timeout=30, check_same_thread=False)
     conn.execute("PRAGMA busy_timeout=5000")
     return conn
@@ -64,20 +114,32 @@ def _ensure_db():
             return
         conn = _db_connect()
         try:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS json_store (
-                    path TEXT PRIMARY KEY,
-                    payload TEXT NOT NULL,
-                    updated_at REAL NOT NULL
+            if _db_use_postgres:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS json_store (
+                            path TEXT PRIMARY KEY,
+                            payload TEXT NOT NULL,
+                            updated_at DOUBLE PRECISION NOT NULL
+                        )
+                        """
+                    )
+            else:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS json_store (
+                        path TEXT PRIMARY KEY,
+                        payload TEXT NOT NULL,
+                        updated_at REAL NOT NULL
+                    )
+                    """
                 )
-                """
-            )
-            try:
-                conn.execute("PRAGMA journal_mode=WAL")
-                conn.execute("PRAGMA synchronous=NORMAL")
-            except Exception:
-                pass
+                try:
+                    conn.execute("PRAGMA journal_mode=WAL")
+                    conn.execute("PRAGMA synchronous=NORMAL")
+                except Exception:
+                    pass
             conn.commit()
         finally:
             conn.close()
@@ -91,23 +153,66 @@ def load_json(path):
     for attempt in range(8):
         conn = _db_connect()
         try:
-            row = conn.execute("SELECT payload FROM json_store WHERE path = ?", (p,)).fetchone()
+            if _db_use_postgres:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT payload FROM json_store WHERE path = %s", (p,))
+                    row = cur.fetchone()
+            else:
+                row = conn.execute("SELECT payload FROM json_store WHERE path = ?", (p,)).fetchone()
             if row and row[0]:
                 try:
                     return json.loads(row[0])
                 except Exception:
                     return {}
+            if _db_use_postgres:
+                # One-time migration path: if postgres is empty, reuse existing sqlite payload.
+                sqlite_data = _load_json_from_legacy_sqlite(p)
+                if sqlite_data is not None:
+                    payload = json.dumps(sqlite_data, ensure_ascii=False)
+                    now_ts = time.time()
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            INSERT INTO json_store(path, payload, updated_at)
+                            VALUES (%s, %s, %s)
+                            ON CONFLICT(path) DO UPDATE
+                            SET payload = EXCLUDED.payload, updated_at = EXCLUDED.updated_at
+                            """,
+                            (p, payload, now_ts)
+                        )
+                    conn.commit()
+                    return sqlite_data
             # Lazy migration from legacy JSON files (first read of each dataset).
             data = _load_json_file(p)
             payload = json.dumps(data, ensure_ascii=False)
-            conn.execute(
-                "INSERT OR REPLACE INTO json_store(path, payload, updated_at) VALUES (?, ?, ?)",
-                (p, payload, time.time())
-            )
+            now_ts = time.time()
+            if _db_use_postgres:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO json_store(path, payload, updated_at)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT(path) DO UPDATE
+                        SET payload = EXCLUDED.payload, updated_at = EXCLUDED.updated_at
+                        """,
+                        (p, payload, now_ts)
+                    )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO json_store(path, payload, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(path) DO UPDATE
+                    SET payload = excluded.payload, updated_at = excluded.updated_at
+                    """,
+                    (p, payload, now_ts)
+                )
             conn.commit()
             return data
-        except sqlite3.OperationalError as e:
-            if "locked" not in str(e).lower() or attempt == 7:
+        except Exception as e:
+            msg = str(e).lower()
+            is_retryable = "locked" in msg or "could not serialize" in msg or "deadlock" in msg
+            if not is_retryable or attempt == 7:
                 raise
             time.sleep(0.05 * (attempt + 1))
         finally:
@@ -123,18 +228,63 @@ def save_json(path, data):
     for attempt in range(8):
         conn = _db_connect()
         try:
-            conn.execute(
-                "INSERT OR REPLACE INTO json_store(path, payload, updated_at) VALUES (?, ?, ?)",
-                (p, payload, time.time())
-            )
+            now_ts = time.time()
+            if _db_use_postgres:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO json_store(path, payload, updated_at)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT(path) DO UPDATE
+                        SET payload = EXCLUDED.payload, updated_at = EXCLUDED.updated_at
+                        """,
+                        (p, payload, now_ts)
+                    )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO json_store(path, payload, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(path) DO UPDATE
+                    SET payload = excluded.payload, updated_at = excluded.updated_at
+                    """,
+                    (p, payload, now_ts)
+                )
             conn.commit()
             return
-        except sqlite3.OperationalError as e:
-            if "locked" not in str(e).lower() or attempt == 7:
+        except Exception as e:
+            msg = str(e).lower()
+            is_retryable = "locked" in msg or "could not serialize" in msg or "deadlock" in msg
+            if not is_retryable or attempt == 7:
                 raise
             time.sleep(0.05 * (attempt + 1))
         finally:
             conn.close()
+
+def _r2_enabled():
+    return _r2_client is not None
+
+def _r2_object_key(folder, filename):
+    return f"uploads/{folder}/{filename}"
+
+def _r2_upload_fileobj(fileobj, folder, filename, content_type="application/octet-stream"):
+    key = _r2_object_key(folder, filename)
+    _r2_client.upload_fileobj(
+        fileobj,
+        R2_BUCKET_NAME,
+        key,
+        ExtraArgs={"ContentType": content_type}
+    )
+    return key
+
+def _r2_signed_or_public_url(key):
+    if R2_PUBLIC_BASE_URL:
+        return f"{R2_PUBLIC_BASE_URL}/{key}"
+    return _r2_client.generate_presigned_url(
+        ClientMethod="get_object",
+        Params={"Bucket": R2_BUCKET_NAME, "Key": key},
+        ExpiresIn=max(60, R2_PRESIGN_TTL)
+    )
 
 def emit_to_user(username, event_name, payload, exclude_sid=None):
     """Отправка Socket.IO-события всем сессиям пользователя."""
@@ -2434,7 +2584,11 @@ def upload_file():
         return jsonify({"error": "Файл слишком большой"}), 400
     ext      = os.path.splitext(file.filename or "")[1]
     filename = f"{uuid.uuid4().hex}{ext}"
-    file.save(os.path.join(UPLOAD_FOLDER, file_type, filename))
+    if _r2_enabled():
+        file.seek(0)
+        _r2_upload_fileobj(file.stream, file_type, filename, content_type=(file.content_type or "application/octet-stream"))
+    else:
+        file.save(os.path.join(UPLOAD_FOLDER, file_type, filename))
     return jsonify({"status": "ok", "url": f"/{file_type}/{filename}", "size": size})
 
 @app.route("/api/transcribe_audio", methods=["POST"])
@@ -2470,14 +2624,23 @@ def api_transcribe_audio():
 
 @app.route('/images/<path:filename>')
 def serve_images(filename):
+    if _r2_enabled():
+        return redirect(_r2_signed_or_public_url(_r2_object_key("images", filename)))
     return send_from_directory(os.path.join(UPLOAD_FOLDER, 'images'), filename)
 
 @app.route('/files/<path:filename>')
 def serve_files(filename):
+    if _r2_enabled():
+        return redirect(_r2_signed_or_public_url(_r2_object_key("files", filename)))
     return send_from_directory(os.path.join(UPLOAD_FOLDER, 'files'), filename)
 
 @app.route('/uploads/<folder>/<filename>')
 def uploaded_file(folder, filename):
+    folder = str(folder or "").strip().lower()
+    if folder not in ("images", "files", "avatars"):
+        return jsonify({"error": "bad_folder"}), 400
+    if _r2_enabled():
+        return redirect(_r2_signed_or_public_url(_r2_object_key(folder, filename)))
     return send_from_directory(os.path.join(UPLOAD_FOLDER, folder), filename)
 
 

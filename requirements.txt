@@ -2,3 +2,5 @@ Flask==3.0.3
 Flask-SocketIO==5.3.6
 eventlet==0.36.1
 gunicorn==22.0.0
+psycopg[binary]==3.2.9
+boto3==1.35.99
