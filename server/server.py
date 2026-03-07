@@ -36,6 +36,7 @@ NICKNAMES_FILE = "nicknames.json"  # <-- кастомные имена {"me": {"
 PINNED_FILE = "pinned_messages.json"
 STORIES_FILE = "stories.json"
 HELP_FORUM_FILE = "help_forum.json"
+SUPPORT_FILE = "support_tickets.json"
 HELP_MODERATORS = ["admin", "moderator", "support"]
 
 UPLOAD_FOLDER = os.path.join(os.getcwd(), 'uploads')
@@ -68,6 +69,8 @@ STORAGE_PRESIGN_TTL = R2_PRESIGN_TTL if R2_ENDPOINT_URL else B2_PRESIGN_TTL
 STORAGE_REGION = os.getenv("STORAGE_REGION", "").strip() or os.getenv("AWS_REGION", "").strip() or "us-east-1"
 STORAGE_PROXY_DOWNLOADS = os.getenv("STORAGE_PROXY_DOWNLOADS", "1").strip().lower() not in ("0", "false", "no")
 STORAGE_FALLBACK_LOCAL = os.getenv("STORAGE_FALLBACK_LOCAL", "1").strip().lower() not in ("0", "false", "no")
+STATE_SYNC_TO_OBJECT_STORAGE = os.getenv("STATE_SYNC_TO_OBJECT_STORAGE", "1").strip().lower() not in ("0", "false", "no")
+STATE_OBJECT_PREFIX = os.getenv("STATE_OBJECT_PREFIX", "state/json_store").strip().strip("/")
 
 _r2_client = None
 if boto3 and STORAGE_ENDPOINT_URL and STORAGE_ACCESS_KEY_ID and STORAGE_SECRET_ACCESS_KEY and STORAGE_BUCKET_NAME:
@@ -101,9 +104,12 @@ def serve_crypto(filename):
     return send_from_directory('../crypto', filename)
 
 # ─── Утилиты ────────────────────────────────────────────────────
-DB_FILE = "app_data.sqlite3"
+_auto_data_dir = "/data" if (os.name != "nt" and os.path.isdir("/data")) else ""
+DATA_DIR = os.getenv("DATA_DIR", "").strip() or _auto_data_dir
+DB_FILE = os.getenv("DB_FILE", "").strip() or (os.path.join(DATA_DIR, "app_data.sqlite3") if DATA_DIR else "app_data.sqlite3")
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 _db_use_postgres = bool(DATABASE_URL and DATABASE_URL.startswith(("postgres://", "postgresql://")) and psycopg)
+JSON_FILE_FALLBACK = os.getenv("JSON_FILE_FALLBACK", "0").strip().lower() in ("1", "true", "yes")
 _db_init_done = False
 _db_lock = threading.Lock()
 
@@ -115,6 +121,12 @@ def _load_json_file(path):
             return json.load(f)
         except Exception:
             return {}
+
+def _default_dataset(path):
+    # SQL-first defaults to avoid reading repo JSON files on every restart.
+    if path == SUPPORT_FILE:
+        return []
+    return {}
 
 def _load_json_from_legacy_sqlite(path):
     if not os.path.exists(DB_FILE):
@@ -145,6 +157,10 @@ def _ensure_db():
     with _db_lock:
         if _db_init_done:
             return
+        if not _db_use_postgres:
+            db_dir = os.path.dirname(DB_FILE)
+            if db_dir:
+                os.makedirs(db_dir, exist_ok=True)
         conn = _db_connect()
         try:
             if _db_use_postgres:
@@ -215,8 +231,36 @@ def load_json(path):
                         )
                     conn.commit()
                     return sqlite_data
-            # Lazy migration from legacy JSON files (first read of each dataset).
-            data = _load_json_file(p)
+            # Restore dataset from object storage (B2/R2) if available.
+            state_data = _state_read_from_object(p)
+            if state_data is not None:
+                payload = json.dumps(state_data, ensure_ascii=False)
+                now_ts = time.time()
+                if _db_use_postgres:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            INSERT INTO json_store(path, payload, updated_at)
+                            VALUES (%s, %s, %s)
+                            ON CONFLICT(path) DO UPDATE
+                            SET payload = EXCLUDED.payload, updated_at = EXCLUDED.updated_at
+                            """,
+                            (p, payload, now_ts)
+                        )
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO json_store(path, payload, updated_at)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(path) DO UPDATE
+                        SET payload = excluded.payload, updated_at = excluded.updated_at
+                        """,
+                        (p, payload, now_ts)
+                    )
+                conn.commit()
+                return state_data
+            # SQL-first mode: by default, do not read legacy JSON files from repo.
+            data = _load_json_file(p) if JSON_FILE_FALLBACK else _default_dataset(p)
             payload = json.dumps(data, ensure_ascii=False)
             now_ts = time.time()
             if _db_use_postgres:
@@ -241,6 +285,7 @@ def load_json(path):
                     (p, payload, now_ts)
                 )
             conn.commit()
+            _state_write_to_object(p, data)
             return data
         except Exception as e:
             msg = str(e).lower()
@@ -284,6 +329,7 @@ def save_json(path, data):
                     (p, payload, now_ts)
                 )
             conn.commit()
+            _state_write_to_object(p, data)
             return
         except Exception as e:
             msg = str(e).lower()
@@ -296,6 +342,44 @@ def save_json(path, data):
 
 def _r2_enabled():
     return _r2_client is not None
+
+def _state_storage_enabled():
+    return _r2_enabled() and STATE_SYNC_TO_OBJECT_STORAGE
+
+def _state_object_key(path):
+    clean = str(path or "").strip().replace("\\", "/").lstrip("/")
+    return f"{STATE_OBJECT_PREFIX}/{clean}.json" if STATE_OBJECT_PREFIX else f"{clean}.json"
+
+def _state_read_from_object(path):
+    if not _state_storage_enabled():
+        return None
+    key = _state_object_key(path)
+    try:
+        obj = _r2_client.get_object(Bucket=STORAGE_BUCKET_NAME, Key=key)
+        body = obj.get("Body")
+        if body is None:
+            return None
+        raw = body.read()
+        if not raw:
+            return None
+        return json.loads(raw.decode("utf-8"))
+    except Exception:
+        return None
+
+def _state_write_to_object(path, data):
+    if not _state_storage_enabled():
+        return
+    key = _state_object_key(path)
+    try:
+        payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        _r2_client.put_object(
+            Bucket=STORAGE_BUCKET_NAME,
+            Key=key,
+            Body=payload,
+            ContentType="application/json; charset=utf-8",
+        )
+    except Exception as e:
+        app.logger.warning("State object sync failed for %s: %s", path, e)
 
 def _r2_object_key(folder, filename):
     return f"uploads/{folder}/{filename}"
@@ -2813,7 +2897,6 @@ def upload_avatar():
 
 
 # ─── Тех. поддержка ──────────────────────────────────────────────
-SUPPORT_FILE   = "support_tickets.json"
 SUPPORT_ADMINS = ["admin@levart.app", "support@levart.app"]  # список почт администраторов
 
 @app.route("/api/support_ticket", methods=["POST"])
