@@ -21,6 +21,18 @@
         <div class="app-loader-bar"><span></span></div>
     </div>
 </div>
+<script>
+(() => {
+    const hide = () => {
+        const loader = document.getElementById('appLoader');
+        if (loader) loader.classList.add('hidden');
+    };
+    window.addEventListener('load', () => setTimeout(hide, 1200), { once: true });
+    window.addEventListener('error', () => setTimeout(hide, 0));
+    window.addEventListener('unhandledrejection', () => setTimeout(hide, 0));
+    setTimeout(hide, 8000);
+})();
+</script>
 
 <!-- ─── TOAST ─── -->
 <div id="toast-container"></div>

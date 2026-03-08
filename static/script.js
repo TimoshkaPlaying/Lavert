@@ -1254,6 +1254,11 @@ function hideAppLoader(delayMs = 120) {
     } catch {}
 }
 
+// Safety net: never keep loader forever even if an init branch crashes.
+setTimeout(() => {
+    try { hideAppLoader(0); } catch {}
+}, 8500);
+
 function getToastIcon(type) {
     if (type === 'error') return '⚠';
     if (type === 'call') return '📞';
