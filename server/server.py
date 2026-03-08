@@ -1861,7 +1861,7 @@ def handle_user_online(data):
     if uname not in _online_users:
         _online_users[uname] = set()
     _online_users[uname].add(sid)
-    emit("user_status", {"username": uname, "online": True}, broadcast=True)
+    emit("user_status", {"username": uname, "online": True})
 
     # Отправляем состояние активных звонков, чтобы восстановить после перезагрузки
     for call_id, call in _active_calls.items():
@@ -1897,7 +1897,7 @@ def handle_disconnect():
 
         if not sids:
             _online_users.pop(uname, None)
-            emit("user_status", {"username": uname, "online": False, "last_seen": int(time.time())}, broadcast=True)
+            emit("user_status", {"username": uname, "online": False, "last_seen": int(time.time())})
 
 @app.route("/api/online_status")
 def online_status():
@@ -2081,7 +2081,7 @@ def handle_toggle_reaction(data):
 @socketio.on("message_read")
 def handle_message_read(data):
     reader = data.get("reader")
-    emit("chat_read", {"reader": reader, "by_whom": data.get("peer")}, broadcast=True)
+    emit("chat_read", {"reader": reader, "by_whom": data.get("peer")})
 
 # ─── Звонки (WebRTC signal + call state) ─────────────────────────
 @socketio.on("call_invite")
@@ -2337,7 +2337,7 @@ def handle_edit(data):
                 m["cipher"] = cipher
                 m["edited"] = True
                 save_json(MESSAGES_FILE, msgs)
-                emit("message_edited", {"id": msg_id, "cipher": cipher}, broadcast=True)
+                emit("message_edited", {"id": msg_id, "cipher": cipher})
                 return
 
 @socketio.on('delete_message')
@@ -2360,7 +2360,7 @@ def handle_delete(data):
                 found = True; break
     if found:
         save_json(MESSAGES_FILE, msgs)
-        emit('message_deleted', {'id': msg_id}, broadcast=True, include_self=True)
+        emit('message_deleted', {'id': msg_id}, include_self=True)
 
 @app.route("/api/delete_chat", methods=["POST"])
 def delete_chat():
@@ -3084,7 +3084,7 @@ def mark_read():
         last_read[me] = {}
     last_read[me][peer] = time.time()
     save_json(LAST_READ_FILE, last_read)
-    socketio.emit("chat_read", {"reader": me, "by_whom": peer}, broadcast=True)
+    socketio.emit("chat_read", {"reader": me, "by_whom": peer})
     return jsonify({"ok": True})
 
 @app.route("/api/last_read")
