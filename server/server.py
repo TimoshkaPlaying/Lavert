@@ -487,6 +487,9 @@ def _allow_media_filename(filename, allowed_exts):
 @app.before_request
 def _block_sensitive_http_files():
     path = request.path or ""
+    # Keep frontend assets fully accessible (script.js, css, images in /static).
+    if path.startswith("/static/"):
+        return None
     # Block direct web access to sensitive/local files even if guessed by URL.
     if _is_blocked_http_path(path):
         return ("", 404)
