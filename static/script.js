@@ -48,6 +48,9 @@ const ACTIVE_KEYS_KEY = (u) => `active_keys_${String(u || "").toLowerCase()}`;
 const PASSWORD_CACHE_KEY = (u) => `user_password_${String(u || "").toLowerCase()}`;
 const MEDIA_CACHE_NAME = (u) => `levart_media_cache_${String(u || '').toLowerCase()}`;
 const AUTH_TOKEN_KEY = (u) => `auth_token_${String(u || "").toLowerCase()}`;
+const OFFLINE_HISTORY_KEY = (u) => `levart_offline_history_${String(u || "").toLowerCase()}`;
+const OFFLINE_META_KEY = (u) => `levart_offline_meta_${String(u || "").toLowerCase()}`;
+const OFFLINE_STORE_NAME = "offline_chat_meta";
 
 function getAuthToken(user = "") {
     const u = String(user || localStorage.getItem("username") || "").toLowerCase();
@@ -91,6 +94,14 @@ async function clearSessionMediaCache(user = "") {
     }
 }
 
+function normalizeChatId(me, peer) {
+    const a = String(me || "").toLowerCase();
+    const b = String(peer || "").toLowerCase();
+    if (!a || !b) return "";
+    if (b.startsWith("group_")) return b;
+    return [a, b].sort().join("_");
+}
+
 function getStoredActiveKeys(user) {
     if (!user) return null;
     return localStorage.getItem(ACTIVE_KEYS_KEY(user)) || sessionStorage.getItem(ACTIVE_KEYS_KEY(user));
@@ -116,8 +127,11 @@ function clearAuthSession(user) {
     localStorage.removeItem("username");
     localStorage.removeItem(ACTIVE_KEYS_KEY(u));
     localStorage.removeItem(PASSWORD_CACHE_KEY(u));
+    localStorage.removeItem(OFFLINE_HISTORY_KEY(u));
+    localStorage.removeItem(OFFLINE_META_KEY(u));
     sessionStorage.removeItem(ACTIVE_KEYS_KEY(u));
     sessionStorage.removeItem("userPassword");
+    clearOfflineSessionCache(u).catch?.(() => {});
 }
 
 async function ensureAuthTokenForCurrentUser() {
@@ -152,15 +166,118 @@ async function ensureAuthTokenForCurrentUser() {
  */
 function openDB() {
     return new Promise((resolve, reject) => {
-        const request = indexedDB.open(SETTINGS.DB_NAME, 1);
+        const request = indexedDB.open(SETTINGS.DB_NAME, 2);
         request.onupgradeneeded = () => {
             if (!request.result.objectStoreNames.contains(SETTINGS.DB_STORE)) {
                 request.result.createObjectStore(SETTINGS.DB_STORE);
+            }
+            if (!request.result.objectStoreNames.contains(OFFLINE_STORE_NAME)) {
+                request.result.createObjectStore(OFFLINE_STORE_NAME);
             }
         };
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error);
     });
+}
+
+async function saveOfflineChatPayload(chatId, payload) {
+    if (!chatId || !payload) return;
+    try {
+        const db = await openDB();
+        const tx = db.transaction(OFFLINE_STORE_NAME, "readwrite");
+        tx.objectStore(OFFLINE_STORE_NAME).put(payload, chatId);
+        await new Promise((resolve) => (tx.oncomplete = resolve));
+    } catch (e) {
+        logSilent("saveOfflineChatPayload", e);
+    }
+}
+
+async function getOfflineChatPayload(chatId) {
+    if (!chatId) return null;
+    try {
+        const db = await openDB();
+        const tx = db.transaction(OFFLINE_STORE_NAME, "readonly");
+        const req = tx.objectStore(OFFLINE_STORE_NAME).get(chatId);
+        return await new Promise((resolve) => (req.onsuccess = () => resolve(req.result || null)));
+    } catch (e) {
+        logSilent("getOfflineChatPayload", e);
+        return null;
+    }
+}
+
+async function clearOfflineSessionCache(user = "") {
+    const me = String(user || localStorage.getItem("username") || "").toLowerCase();
+    if (!me) return;
+    try {
+        const db = await openDB();
+        const tx = db.transaction(OFFLINE_STORE_NAME, "readwrite");
+        const store = tx.objectStore(OFFLINE_STORE_NAME);
+        const allKeysReq = store.getAllKeys();
+        const allKeys = await new Promise((resolve) => (allKeysReq.onsuccess = () => resolve(allKeysReq.result || [])));
+        for (const key of allKeys) {
+            const k = String(key || "").toLowerCase();
+            if (k.includes(me)) store.delete(key);
+        }
+        await new Promise((resolve) => (tx.oncomplete = resolve));
+    } catch (e) {
+        logSilent("clearOfflineSessionCache", e);
+    }
+}
+
+async function fetchHistoryWithOffline(peerId) {
+    const me = String(username || localStorage.getItem("username") || "").toLowerCase();
+    const peer = String(peerId || "").toLowerCase();
+    const chatId = normalizeChatId(me, peer);
+    const fallback = async () => {
+        const cached = await getOfflineChatPayload(chatId);
+        const history = Array.isArray(cached?.history) ? cached.history : [];
+        return { history, fromCache: true };
+    };
+
+    if (!me || !peer || !chatId) return fallback();
+
+    try {
+        const res = await fetch(`/get_history?me=${encodeURIComponent(me)}&friend=${encodeURIComponent(peer)}`);
+        if (!res.ok) return fallback();
+        const history = await res.json();
+        if (!Array.isArray(history)) return fallback();
+        await saveOfflineChatPayload(chatId, {
+            chat_id: chatId,
+            me,
+            peer,
+            history,
+            updated_at: Date.now()
+        });
+        return { history, fromCache: false };
+    } catch {
+        return fallback();
+    }
+}
+
+async function preloadOfflineHistoryForContacts() {
+    const me = String(username || localStorage.getItem("username") || "").toLowerCase();
+    if (!me) return;
+    const contacts = Array.isArray(window._allContacts) ? window._allContacts : [];
+    if (!contacts.length) return;
+
+    const peers = contacts
+        .map((c) => String(c?.username || "").toLowerCase())
+        .filter(Boolean)
+        .slice(0, 120);
+
+    const workers = [];
+    const concurrency = 3;
+    for (let i = 0; i < concurrency; i++) {
+        workers.push((async () => {
+            while (peers.length) {
+                const peer = peers.shift();
+                if (!peer) break;
+                await fetchHistoryWithOffline(peer);
+                await new Promise((r) => setTimeout(r, 35));
+            }
+        })());
+    }
+    await Promise.allSettled(workers);
 }
 
 async function saveKeyToDB(userId, encryptedData) {
@@ -196,6 +313,26 @@ let currentGroupData = null;
 let myFriendsList = [];
 const sessionAESKeys = {};
 const _groupPermCache = {};
+let _offlinePreloadInFlight = false;
+let _offlinePreloadDoneForUser = "";
+
+function scheduleOfflinePreload() {
+    const me = String(username || localStorage.getItem("username") || "").toLowerCase();
+    if (!me) return;
+    if (_offlinePreloadInFlight) return;
+    if (_offlinePreloadDoneForUser === me) return;
+    _offlinePreloadInFlight = true;
+    setTimeout(async () => {
+        try {
+            await preloadOfflineHistoryForContacts();
+            _offlinePreloadDoneForUser = me;
+        } catch (e) {
+            logSilent("scheduleOfflinePreload", e);
+        } finally {
+            _offlinePreloadInFlight = false;
+        }
+    }, 250);
+}
 
 
 // ─── КЭШИРОВАННЫЕ ПРЕВЬЮ СООБЩЕНИЙ ───────────────────────────────
@@ -225,9 +362,8 @@ async function initAllPreviews() {
 
         try {
             // Получаем только последнее сообщение
-            const res = await fetch(`/get_history?me=${username}&friend=${c.username}&limit=1`);
-            if (!res.ok) continue;
-            const history = await res.json();
+            const fetched = await fetchHistoryWithOffline(c.username);
+            const history = Array.isArray(fetched?.history) ? fetched.history : [];
             if (!history || history.length === 0) continue;
 
             const packet = history[history.length - 1];
@@ -2122,9 +2258,9 @@ async function loadHistory(friendName) {
         lastReadTs   = parseFloat(lrData.last_read) || 0;
     } catch {}
 
-    // Шаг 2: грузим историю
-    const res     = await fetch(`/get_history?me=${username}&friend=${friendName}`);
-    const history = await res.json();
+    // Шаг 2: грузим историю (с офлайн fallback)
+    const fetched = await fetchHistoryWithOffline(friendName);
+    const history = Array.isArray(fetched?.history) ? fetched.history : [];
 
     let dividerInserted = false;
 
@@ -5702,8 +5838,8 @@ async function loadUserMedia(targetUsername) {
     filesList.innerHTML = '';
 
     try {
-        const res = await fetch(`/get_history?me=${username}&friend=${targetUsername}`);
-        const history = await res.json();
+        const fetched = await fetchHistoryWithOffline(targetUsername);
+        const history = Array.isArray(fetched?.history) ? fetched.history : [];
 
         const chatId = [username, targetUsername].sort().join('_');
         let aesKey = sessionAESKeys[chatId] || sessionAESKeys[targetUsername];
@@ -5827,8 +5963,8 @@ async function loadGroupMedia(groupId) {
     mediaGrid.innerHTML = '<div style="color:var(--text-dim);font-size:13px;padding:10px;grid-column:span 3;text-align:center;">Загрузка...</div>';
     filesList.innerHTML = '';
     try {
-        const res = await fetch(`/get_history?me=${username}&friend=${groupId}`);
-        const history = await res.json();
+        const fetched = await fetchHistoryWithOffline(groupId);
+        const history = Array.isArray(fetched?.history) ? fetched.history : [];
         let aesKey = sessionAESKeys[groupId] || null;
         if (!aesKey && String(window.currentChat || '') === String(groupId) && window.currentAES) {
             aesKey = window.currentAES;
@@ -7405,6 +7541,12 @@ window.syncMyContacts = async function() {
     try {
         const res = await fetch(`/api/my_contacts/${curUser}?t=${Date.now()}`);
         window._allContacts = await res.json() || [];
+        try {
+            localStorage.setItem(OFFLINE_META_KEY(curUser), JSON.stringify({
+                contacts: window._allContacts,
+                updated_at: Date.now()
+            }));
+        } catch {}
 
         // Применяем активную папку
         const folder = getAllFolders().find(f => f.id === window._activeFolder) || BUILT_IN_FOLDERS[0];
@@ -7412,8 +7554,20 @@ window.syncMyContacts = async function() {
         renderFolderBar();
         // Фоновая загрузка превью (не блокирует UI)
         setTimeout(() => initAllPreviews(), 300);
+        scheduleOfflinePreload();
     } catch(e) {
         console.error('syncMyContacts error:', e);
+        try {
+            const raw = localStorage.getItem(OFFLINE_META_KEY(curUser));
+            const parsed = raw ? JSON.parse(raw) : null;
+            const contacts = Array.isArray(parsed?.contacts) ? parsed.contacts : [];
+            if (contacts.length) {
+                window._allContacts = contacts;
+                const folder = getAllFolders().find(f => f.id === window._activeFolder) || BUILT_IN_FOLDERS[0];
+                renderContactsList(filterContactsByFolder(window._allContacts, folder));
+                renderFolderBar();
+            }
+        } catch {}
     }
 };
 
@@ -11138,6 +11292,7 @@ document.addEventListener("DOMContentLoaded", async () => {
             // await loadMyFriends();
             await getMyPersistentKeys();
             await syncMyContacts();
+            scheduleOfflinePreload();
             await processInviteJoinFromLink();
             await loadStoriesFeed();
             loadAppearanceSettings();

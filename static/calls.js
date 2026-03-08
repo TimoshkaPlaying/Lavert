@@ -99,6 +99,16 @@
     } catch {}
   }
 
+  function applyAndroidSpeakerRoute(isMediaSpeakerEnabled) {
+    try {
+      if (!window.LevartAndroid) return;
+      if (typeof window.LevartAndroid.setSpeakerMode !== 'function') return;
+      window.LevartAndroid.setSpeakerMode(isMediaSpeakerEnabled ? 'speaker' : 'earpiece');
+    } catch (e) {
+      logCallSilent('applyAndroidSpeakerRoute', e);
+    }
+  }
+
   function isMobileViewport() {
     return !!(window.matchMedia && window.matchMedia('(max-width: 900px)').matches);
   }
@@ -1797,6 +1807,7 @@
       state.micWasEnabledBeforeHeadphonesOff = false;
     }
     syncRemoteAudioElements();
+    applyAndroidSpeakerRoute(state.headphonesEnabled);
   }
 
   async function toggleCam() {
