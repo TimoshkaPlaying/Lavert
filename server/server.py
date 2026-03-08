@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify, render_template, send_from_directory, redirect, Response, stream_with_context
 from flask_socketio import SocketIO, emit
 import json, os, time, uuid, tempfile, subprocess, shutil, logging, sqlite3, threading
+from urllib.parse import unquote
 
 try:
     import psycopg
@@ -26,6 +27,28 @@ _sid_to_user  = {}   # { sid: username }
 _active_calls = {}   # { call_id: {chat_id, participants:set, created_at, screen_owner, allow_draw_all, control_allowed:set} }
 _auth_tokens = {}    # { token: {username, issued_at, last_seen} }
 _forum_rate = {}     # { username: {"topic":[ts...], "reply":[ts...]} }
+
+BLOCKED_HTTP_EXTENSIONS = {
+    ".py", ".pyc", ".pyo", ".pyd", ".json", ".sqlite", ".sqlite3", ".db", ".env",
+    ".ini", ".cfg", ".yaml", ".yml", ".toml", ".log", ".md", ".sql", ".pem", ".key",
+    ".crt", ".sh", ".bat", ".ps1", ".zip", ".tar", ".gz", ".tgz", ".7z"
+}
+BLOCKED_HTTP_BASENAMES = {
+    "server.py", "requirements.txt", "render.yaml", ".renderignore", ".dockerignore",
+    "dockerfile", "dockhost_api_token.txt", "render_api_key.txt", "b2_application_key.txt",
+    "b2_key_id.txt", "cloudflare_token.txt", "app_data.sqlite3"
+}
+ALLOWED_IMAGE_EXTENSIONS = {
+    ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".svg",
+    ".mp4", ".webm", ".mov", ".m4v", ".avi", ".mkv",
+    ".mp3", ".wav", ".ogg", ".m4a", ".aac"
+}
+ALLOWED_FILE_EXTENSIONS = {
+    ".pdf", ".txt", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    ".zip", ".rar", ".7z", ".jpg", ".jpeg", ".png", ".webp", ".gif",
+    ".mp4", ".webm", ".mp3", ".wav", ".ogg"
+}
+ALLOWED_CRYPTO_EXTENSIONS = {".css", ".woff", ".woff2", ".ttf", ".otf", ".svg", ".png", ".jpg", ".jpeg"}
 
 USERS_FILE   = "users.json"
 MESSAGES_FILE = "messages.json"
@@ -101,6 +124,9 @@ _sr_backend = None
 
 @app.route('/crypto/<path:filename>')
 def serve_crypto(filename):
+    ext = os.path.splitext(str(filename or ""))[1].lower()
+    if ext not in ALLOWED_CRYPTO_EXTENSIONS:
+        return ("", 404)
     return send_from_directory('../crypto', filename)
 
 # ─── Утилиты ────────────────────────────────────────────────────
@@ -438,6 +464,33 @@ def _r2_upload_fileobj(fileobj, folder, filename, content_type="application/octe
         ExtraArgs={"ContentType": content_type}
     )
     return key
+
+def _is_blocked_http_path(raw_path):
+    p = unquote(str(raw_path or "")).strip().lower()
+    if not p:
+        return False
+    basename = os.path.basename(p)
+    ext = os.path.splitext(basename)[1].lower()
+    if basename in BLOCKED_HTTP_BASENAMES:
+        return True
+    if ext in BLOCKED_HTTP_EXTENSIONS:
+        return True
+    return False
+
+def _allow_media_filename(filename, allowed_exts):
+    name = os.path.basename(str(filename or "").strip())
+    if not name or name != str(filename or "").strip():
+        return False
+    ext = os.path.splitext(name)[1].lower()
+    return ext in allowed_exts
+
+@app.before_request
+def _block_sensitive_http_files():
+    path = request.path or ""
+    # Block direct web access to sensitive/local files even if guessed by URL.
+    if _is_blocked_http_path(path):
+        return ("", 404)
+    return None
 
 def _r2_stream_object(folder, filename):
     key = _r2_object_key(folder, filename)
@@ -2837,6 +2890,8 @@ def api_transcribe_audio():
 
 @app.route('/images/<path:filename>')
 def serve_images(filename):
+    if not _allow_media_filename(filename, ALLOWED_IMAGE_EXTENSIONS):
+        return ("", 404)
     if _r2_enabled():
         try:
             if STORAGE_PROXY_DOWNLOADS:
@@ -2848,6 +2903,8 @@ def serve_images(filename):
 
 @app.route('/files/<path:filename>')
 def serve_files(filename):
+    if not _allow_media_filename(filename, ALLOWED_FILE_EXTENSIONS):
+        return ("", 404)
     if _r2_enabled():
         try:
             if STORAGE_PROXY_DOWNLOADS:
@@ -2862,6 +2919,9 @@ def uploaded_file(folder, filename):
     folder = str(folder or "").strip().lower()
     if folder not in ("images", "files", "avatars"):
         return jsonify({"error": "bad_folder"}), 400
+    allowed = ALLOWED_IMAGE_EXTENSIONS if folder in ("images", "avatars") else ALLOWED_FILE_EXTENSIONS
+    if not _allow_media_filename(filename, allowed):
+        return ("", 404)
     if _r2_enabled():
         try:
             if STORAGE_PROXY_DOWNLOADS:
@@ -2873,10 +2933,14 @@ def uploaded_file(folder, filename):
 
 @app.route('/local/images/<path:filename>')
 def serve_local_images(filename):
+    if not _allow_media_filename(filename, ALLOWED_IMAGE_EXTENSIONS):
+        return ("", 404)
     return send_from_directory(os.path.join(UPLOAD_FOLDER, 'images'), filename)
 
 @app.route('/local/files/<path:filename>')
 def serve_local_files(filename):
+    if not _allow_media_filename(filename, ALLOWED_FILE_EXTENSIONS):
+        return ("", 404)
     return send_from_directory(os.path.join(UPLOAD_FOLDER, 'files'), filename)
 
 
