@@ -21,6 +21,8 @@ except Exception:
 app = Flask(__name__, template_folder="../templates", static_folder="../static")
 socketio = SocketIO(app, cors_allowed_origins="*")
 app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024 * 1024  # 2GB
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+CRYPTO_DIR = os.path.join(BASE_DIR, "crypto")
 
 _online_users = {}   # { username: {sid, sid, ...} }
 _sid_to_user  = {}   # { sid: username }
@@ -48,7 +50,9 @@ ALLOWED_FILE_EXTENSIONS = {
     ".zip", ".rar", ".7z", ".jpg", ".jpeg", ".png", ".webp", ".gif",
     ".mp4", ".webm", ".mp3", ".wav", ".ogg"
 }
-ALLOWED_CRYPTO_EXTENSIONS = {".css", ".woff", ".woff2", ".ttf", ".otf", ".svg", ".png", ".jpg", ".jpeg"}
+ALLOWED_CRYPTO_EXTENSIONS = {
+    ".js", ".mjs", ".css", ".woff", ".woff2", ".ttf", ".otf", ".svg", ".png", ".jpg", ".jpeg"
+}
 
 USERS_FILE   = "users.json"
 MESSAGES_FILE = "messages.json"
@@ -127,7 +131,7 @@ def serve_crypto(filename):
     ext = os.path.splitext(str(filename or ""))[1].lower()
     if ext not in ALLOWED_CRYPTO_EXTENSIONS:
         return ("", 404)
-    return send_from_directory('../crypto', filename)
+    return send_from_directory(CRYPTO_DIR, filename)
 
 # ─── Утилиты ────────────────────────────────────────────────────
 _auto_data_dir = "/data" if (os.name != "nt" and os.path.isdir("/data")) else ""

@@ -1,4 +1,4 @@
-import * as cryptoMod from "/crypto/crypto.js";
+import * as cryptoMod from "/static/crypto.js";
 
 /**
  * ==========================================
@@ -11191,3 +11191,4 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
     });
 });
+
