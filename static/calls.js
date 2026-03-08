@@ -90,7 +90,8 @@
     currentMainSourceId: null,
     remoteScreenTrackIds: {},
     pendingRejoin: null,
-    callMinimized: false
+    callMinimized: false,
+    popoutWindow: null
   };
 
   function logCallSilent(scope, err) {
@@ -111,6 +112,71 @@
 
   function isMobileViewport() {
     return !!(window.matchMedia && window.matchMedia('(max-width: 900px)').matches);
+  }
+
+  function isDesktopAppShell() {
+    return !!(window.pywebview || window.LevartDesktop);
+  }
+
+  function shouldUseCallPopout() {
+    return isDesktopAppShell() && !isMobileViewport();
+  }
+
+  function ensureCallPopoutWindow() {
+    if (!shouldUseCallPopout()) return null;
+    if (state.popoutWindow && !state.popoutWindow.closed) return state.popoutWindow;
+    try {
+      const w = window.open('', 'levart_call_window', 'width=980,height=740,resizable=yes,scrollbars=no');
+      if (!w) return null;
+      w.document.open();
+      w.document.write(`
+        <!doctype html>
+        <html>
+          <head>
+            <meta charset="utf-8" />
+            <meta name="viewport" content="width=device-width,initial-scale=1" />
+            <title>Levart Call</title>
+            <link rel="stylesheet" href="/static/style.css" />
+            <link rel="stylesheet" href="/static/calls.css" />
+            <style>body{margin:0;background:#070d1f;overflow:hidden;}</style>
+          </head>
+          <body></body>
+        </html>
+      `);
+      w.document.close();
+      w.addEventListener('beforeunload', () => {
+        try {
+          if (ui.panel && ui.panel.parentNode !== document.body) document.body.appendChild(ui.panel);
+        } catch {}
+      });
+      state.popoutWindow = w;
+      return w;
+    } catch {
+      return null;
+    }
+  }
+
+  function moveCallPanelToPopout() {
+    if (!shouldUseCallPopout() || !ui.panel) return;
+    const w = ensureCallPopoutWindow();
+    if (!w || w.closed || !w.document?.body) return;
+    try {
+      if (ui.panel.parentNode !== w.document.body) {
+        w.document.body.appendChild(ui.panel);
+      }
+      if (ui.minimizeBtn) ui.minimizeBtn.style.display = 'none';
+      w.focus();
+    } catch {}
+  }
+
+  function restoreCallPanelToMainWindow() {
+    if (!ui.panel) return;
+    try {
+      if (ui.panel.parentNode !== document.body) {
+        document.body.appendChild(ui.panel);
+      }
+      if (ui.minimizeBtn) ui.minimizeBtn.style.display = '';
+    } catch {}
   }
 
   function loadCallPrefs() {
@@ -948,10 +1014,11 @@
     const info = getActiveCallForCurrentChat();
     const canJoin = !!info && !state.inCall;
     const canRestore = !!state.inCall && !!state.callMinimized;
-    ui.liveIndicator.classList.toggle('hidden', !(canJoin || canRestore));
-    if (!(canJoin || canRestore)) return;
+    // При свёрнутом звонке показываем только зелёный чип "Вернуться к звонку".
+    ui.liveIndicator.classList.toggle('hidden', !canJoin || canRestore);
+    if (!canJoin || canRestore) return;
 
-    let text = canRestore ? 'Вернуться к звонку' : 'Идет звонок';
+    let text = 'Идет звонок';
     const participants = Array.isArray(info?.participants) ? info.participants : [];
     if (!canRestore && info?.lone_since && participants.length <= 1) {
       const sec = Math.max(0, 180 - Math.floor((Date.now() / 1000) - Number(info.lone_since)));
@@ -963,6 +1030,13 @@
   }
 
   function setCallMinimized(flag) {
+    if (shouldUseCallPopout()) {
+      state.callMinimized = false;
+      ui.panel?.classList.remove('minimized');
+      ui.reopenBtn?.classList.add('hidden');
+      updateLiveIndicator();
+      return;
+    }
     state.callMinimized = !!flag;
     ui.panel?.classList.toggle('minimized', state.callMinimized);
     ui.reopenBtn?.classList.toggle('hidden', !(state.inCall && state.callMinimized));
@@ -1410,6 +1484,7 @@
   }
 
   function showPanel() {
+    if (shouldUseCallPopout()) restoreCallPanelToMainWindow();
     ui.panel.classList.remove('hidden');
     setCallMinimized(false);
     resetPanelToDefault();
@@ -1423,6 +1498,7 @@
     updateHeaderActionsVisibility();
     renderParticipantAvatars();
     enforcePanelBounds();
+    if (shouldUseCallPopout()) moveCallPanelToPopout();
   }
 
   function resetPanelToDefault() {
@@ -1448,6 +1524,7 @@
   }
 
   function hidePanel() {
+    restoreCallPanelToMainWindow();
     ui.panel.classList.add('hidden');
     setCallMinimized(false);
     ui.settingsBox.classList.add('hidden');

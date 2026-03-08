@@ -1225,6 +1225,34 @@ async function passwordToAESKey(password) {
  * ==========================================
  */
 let _ringToastEl = null;
+let _appLoaderHideTimer = null;
+
+function setAppLoaderText(text) {
+    try {
+        const el = document.getElementById('appLoaderText');
+        if (el && text) el.textContent = String(text);
+    } catch {}
+}
+
+function showAppLoader(text = "") {
+    try {
+        if (text) setAppLoaderText(text);
+        const loader = document.getElementById('appLoader');
+        if (!loader) return;
+        loader.classList.remove('hidden');
+    } catch {}
+}
+
+function hideAppLoader(delayMs = 120) {
+    try {
+        if (_appLoaderHideTimer) clearTimeout(_appLoaderHideTimer);
+        _appLoaderHideTimer = setTimeout(() => {
+            const loader = document.getElementById('appLoader');
+            if (!loader) return;
+            loader.classList.add('hidden');
+        }, Math.max(0, Number(delayMs) || 0));
+    } catch {}
+}
 
 function getToastIcon(type) {
     if (type === 'error') return '⚠';
@@ -1275,18 +1303,49 @@ window.hideCallToast = function() {
 let _desktopNotifyPermAsked = false;
 window.pushDesktopNotification = function(title, body = "", options = {}) {
     try {
-        if (typeof Notification === 'undefined') return;
-        if (Notification.permission !== 'granted') return;
-        if (!document.hidden && document.hasFocus()) return;
-        const n = new Notification(String(title || 'Levart'), {
-            body: String(body || ''),
-            tag: String(options.tag || `levart_${Date.now()}`),
-            silent: !!options.silent
-        });
-        n.onclick = () => {
-            window.focus();
-            n.close();
-        };
+        const appInBackground = !!(document.hidden || !document.hasFocus());
+        if (!appInBackground) return;
+
+        const notifTitle = String(title || 'Levart');
+        const notifBody = String(body || '');
+        const notifTag = String(options.tag || `levart_${Date.now()}`);
+
+        // Native bridge: Windows (pywebview)
+        try {
+            if (window.pywebview?.api?.notify) {
+                window.pywebview.api.notify(notifTitle, notifBody, notifTag);
+            }
+        } catch {}
+
+        // Native bridge: Android WebView app
+        try {
+            if (window.LevartAndroid?.notify) {
+                window.LevartAndroid.notify(notifTitle, notifBody, notifTag);
+            }
+        } catch {}
+
+        // Native bridge: Electron desktop
+        try {
+            if (window.LevartDesktop?.notify) {
+                window.LevartDesktop.notify(notifTitle, notifBody, notifTag);
+            }
+        } catch {}
+
+        // Browser fallback notification
+        if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+            const n = new Notification(notifTitle, {
+                body: notifBody,
+                tag: notifTag,
+                icon: '/img/lavert_logo.png',
+                badge: '/img/lavert_logo.png',
+                silent: !!options.silent,
+                renotify: true
+            });
+            n.onclick = () => {
+                window.focus();
+                n.close();
+            };
+        }
     } catch {}
 };
 
@@ -1323,6 +1382,7 @@ window.register = async () => {
         showToast(UI_TEXT.FILL_FIELDS, "error");
         return;
     }
+    showAppLoader("Создаем аккаунт...");
     
     try {
         const keyPair = await cryptoMod.generateECDHKeyPair();
@@ -1369,10 +1429,12 @@ window.register = async () => {
             setTimeout(() => window.location.replace(ROUTES.MAIN), SETTINGS.REDIRECTION_DELAY);
         } else {
             showToast(result.error, "error");
+            hideAppLoader(80);
         }
     } catch (err) {
         console.error("Registration error:", err);
         showToast(UI_TEXT.CRYPTO_ERR_KEYS, "error");
+        hideAppLoader(80);
     }
 };
 
@@ -1389,6 +1451,7 @@ window.login = async () => {
         showToast(UI_TEXT.FILL_FIELDS, "error");
         return;
     }
+    showAppLoader("Выполняем вход...");
     
     try {
         const hashedPassword = await cryptoMod.hashPassword(p);
@@ -1445,13 +1508,16 @@ window.login = async () => {
             } catch (cryptoErr) {
                 console.error("Key decrypt error:", cryptoErr);
                 showToast(UI_TEXT.CRYPTO_ERR_DECRYPT, "error");
+                hideAppLoader(80);
             }
         } else {
             showToast(result.error, "error");
+            hideAppLoader(80);
         }
     } catch (err) {
         console.error("Login error:", err);
         showToast("Ошибка входа", "error");
+        hideAppLoader(80);
     }
 };
 
@@ -2764,7 +2830,7 @@ if (socket) {
                     }
                     window.pushDesktopNotification(
                         isGroup ? 'Новое сообщение в группе' : `Сообщение от ${packet.from}`,
-                        '',
+                        isGroup ? 'Откройте чат, чтобы прочитать сообщение' : 'Откройте чат, чтобы прочитать сообщение',
                         { tag: `msg_${chatId}` }
                     );
                 }
@@ -4208,6 +4274,21 @@ async function persistPrivateKeyBeforeLogout() {
         const encryptedPrivateKey = await cryptoMod.encryptWithPassword(password, JSON.stringify(privJwk));
         await saveKeyToDB(u, encryptedPrivateKey);
         localStorage.setItem(PASSWORD_CACHE_KEY(u), password);
+        // На выходе всегда сохраняем зашифрованный приватный ключ на сервере
+        // (users.json -> enc_priv_key), чтобы не потерять аккаунт после последнего выхода.
+        try {
+            await fetch("/backup_key", {
+                method: "POST",
+                headers: authJsonHeaders(),
+                body: JSON.stringify({
+                    username: u,
+                    key: encryptedPrivateKey,
+                    initiator: sessionId
+                })
+            });
+        } catch (e) {
+            logSilent("persistPrivateKeyBeforeLogout.backup_key", e);
+        }
         return true;
     } catch (e) {
         console.error("Ошибка сохранения приватного ключа перед выходом:", e);
@@ -11246,6 +11327,12 @@ async function processInviteJoinFromLink() {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
+    const path = window.location.pathname;
+    if (path === ROUTES.MAIN && username) showAppLoader("Загрузка чатов и ключей...");
+    else if (path === ROUTES.LOGIN) showAppLoader("Подготовка входа...");
+    else if (path === ROUTES.REGISTER) showAppLoader("Подготовка регистрации...");
+    else showAppLoader("Запуск приложения...");
+
     initMobileViewportBehavior();
     enforceMobileSearchLayout();
     window.addEventListener('resize', () => {
@@ -11280,7 +11367,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     document.addEventListener('touchmove', (e) => {
         if (e.touches && e.touches.length > 1) e.preventDefault();
     }, { passive: false });
-    const path = window.location.pathname;
     if (window.location.pathname === "/" && username) {
         initAttachmentMenu();
     }
@@ -11324,6 +11410,9 @@ document.addEventListener("DOMContentLoaded", async () => {
                 }, 120);
             });
         }
+        hideAppLoader(140);
+    } else {
+        hideAppLoader(180);
     }
     const modal = document.getElementById('customModal');
     if (modal) {
