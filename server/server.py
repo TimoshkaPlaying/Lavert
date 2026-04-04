@@ -130,10 +130,10 @@ if boto3 and STORAGE_ENDPOINT_URL and STORAGE_ACCESS_KEY_ID and STORAGE_SECRET_A
             client_kwargs["config"] = BotoConfig(
                 signature_version="s3v4",
                 s3={"addressing_style": "path"},
-                connect_timeout=8,
-                read_timeout=120,
+                connect_timeout=5,
+                read_timeout=20,
                 max_pool_connections=50,
-                retries={"max_attempts": 2, "mode": "standard"},
+                retries={"max_attempts": 1, "mode": "standard"},
             )
         _r2_client = boto3.client(
             "s3",
@@ -261,7 +261,7 @@ def load_json(path):
             return state_data
         data = _load_json_file(p) if JSON_FILE_FALLBACK else _default_dataset(p)
         if not _state_write_to_object(p, data):
-            raise RuntimeError(f"state_sync_failed:{p}")
+            app.logger.warning("State strict read fallback for %s: object storage unavailable, serving default", p)
         return data
     _ensure_db()
     for attempt in range(8):
@@ -491,7 +491,7 @@ def _state_storage_subprocess_call(action, key, payload_bytes=None):
         text=True,
         capture_output=True,
         env=env,
-        timeout=35,
+        timeout=8,
     )
     return proc
 

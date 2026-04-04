@@ -465,7 +465,10 @@ async function checkServerConnection() {
         return false;
     }
     try {
-        const res = await _nativeFetch(`/api/online_status?t=${Date.now()}`, { cache: "no-store" });
+        const ctrl = new AbortController();
+        const tm = setTimeout(() => ctrl.abort(), 5000);
+        const res = await _nativeFetch(`/api/online_status?t=${Date.now()}`, { cache: "no-store", signal: ctrl.signal });
+        clearTimeout(tm);
         const ok = !!res && res.ok;
         setConnectionState({ internet: true, server: ok });
         return ok;
@@ -496,10 +499,18 @@ function installOfflineAwareFetch() {
         }
 
         try {
-            const response = await _nativeFetch(input, init);
+            const ctrl = new AbortController();
+            const timeoutMs = cacheable ? 7000 : 12000;
+            const tm = setTimeout(() => ctrl.abort(), timeoutMs);
+            const response = await _nativeFetch(input, { ...init, signal: ctrl.signal });
+            clearTimeout(tm);
             if (navigator.onLine) setConnectionState({ internet: true, server: true });
             if (cacheable && response?.ok) {
                 await saveApiResponseToOfflineCache(urlObj, response.clone());
+            }
+            if (cacheable && response && !response.ok) {
+                const cachedResponse = loadApiResponseFromOfflineCache(urlObj);
+                if (cachedResponse) return cachedResponse;
             }
             return response;
         } catch (err) {
