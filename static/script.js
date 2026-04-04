@@ -51,6 +51,9 @@ const AUTH_TOKEN_KEY = (u) => `auth_token_${String(u || "").toLowerCase()}`;
 const OFFLINE_HISTORY_KEY = (u) => `levart_offline_history_${String(u || "").toLowerCase()}`;
 const OFFLINE_META_KEY = (u) => `levart_offline_meta_${String(u || "").toLowerCase()}`;
 const OFFLINE_STORE_NAME = "offline_chat_meta";
+const API_OFFLINE_CACHE_KEY = (u) => `levart_api_cache_${String(u || "anon").toLowerCase()}`;
+const CONNECTION_BANNER_ID = "connectionStatusBanner";
+const API_CACHE_MAX_ENTRIES = 180;
 
 function getAuthToken(user = "") {
     const u = String(user || localStorage.getItem("username") || "").toLowerCase();
@@ -333,6 +336,216 @@ function scheduleOfflinePreload() {
         }
     }, 250);
 }
+
+const _nativeFetch = window.fetch.bind(window);
+let _connectionMonitorStarted = false;
+let _connectionPingTimer = null;
+const _connectionState = {
+    internet: navigator.onLine,
+    server: true
+};
+
+function getCurrentUserForCache() {
+    return String(localStorage.getItem("username") || "anon").toLowerCase();
+}
+
+function getApiOfflineCacheMap() {
+    try {
+        const raw = localStorage.getItem(API_OFFLINE_CACHE_KEY(getCurrentUserForCache()));
+        const parsed = raw ? JSON.parse(raw) : {};
+        return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+        return {};
+    }
+}
+
+function setApiOfflineCacheMap(map) {
+    try {
+        localStorage.setItem(API_OFFLINE_CACHE_KEY(getCurrentUserForCache()), JSON.stringify(map || {}));
+    } catch {}
+}
+
+function normalizeApiCacheKey(urlObj) {
+    return `${String(urlObj.pathname || "")}${String(urlObj.search || "")}`;
+}
+
+function isOfflineCacheablePath(pathname) {
+    const p = String(pathname || "");
+    return (
+        p.startsWith("/api/my_contacts/") ||
+        p.startsWith("/api/stories_feed/") ||
+        p.startsWith("/api/user_profile/") ||
+        p.startsWith("/api/group_info/") ||
+        p.startsWith("/api/pinned_messages") ||
+        p.startsWith("/api/last_read") ||
+        p.startsWith("/api/online_status") ||
+        p.startsWith("/get_friends") ||
+        p.startsWith("/get_history")
+    );
+}
+
+async function saveApiResponseToOfflineCache(urlObj, response) {
+    try {
+        const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+        if (!contentType.includes("application/json") && !contentType.startsWith("text/")) return;
+        const body = await response.text();
+        if (!body || body.length > 1_500_000) return;
+        const cacheMap = getApiOfflineCacheMap();
+        const key = normalizeApiCacheKey(urlObj);
+        cacheMap[key] = {
+            status: Number(response.status || 200),
+            statusText: String(response.statusText || "OK"),
+            headers: Array.from(response.headers.entries()),
+            body,
+            ts: Date.now()
+        };
+        const entries = Object.entries(cacheMap);
+        if (entries.length > API_CACHE_MAX_ENTRIES) {
+            entries
+                .sort((a, b) => Number(a[1]?.ts || 0) - Number(b[1]?.ts || 0))
+                .slice(0, entries.length - API_CACHE_MAX_ENTRIES)
+                .forEach(([k]) => delete cacheMap[k]);
+        }
+        setApiOfflineCacheMap(cacheMap);
+    } catch {}
+}
+
+function loadApiResponseFromOfflineCache(urlObj) {
+    try {
+        const cacheMap = getApiOfflineCacheMap();
+        const key = normalizeApiCacheKey(urlObj);
+        const item = cacheMap[key];
+        if (!item || typeof item.body !== "string") return null;
+        return new Response(item.body, {
+            status: Number(item.status || 200),
+            statusText: String(item.statusText || "OK"),
+            headers: new Headers(Array.isArray(item.headers) ? item.headers : [])
+        });
+    } catch {
+        return null;
+    }
+}
+
+function ensureConnectionBannerElement() {
+    let el = document.getElementById(CONNECTION_BANNER_ID);
+    if (el) return el;
+    el = document.createElement("div");
+    el.id = CONNECTION_BANNER_ID;
+    el.className = "connection-status-banner";
+    el.setAttribute("role", "status");
+    el.setAttribute("aria-live", "polite");
+    document.body.appendChild(el);
+    return el;
+}
+
+function renderConnectionBanner() {
+    const el = ensureConnectionBannerElement();
+    if (!_connectionState.internet) {
+        el.textContent = "Нет подключения к интернету";
+        el.classList.add("visible");
+        return;
+    }
+    if (!_connectionState.server) {
+        el.textContent = "Нет подключения к серверу";
+        el.classList.add("visible");
+        return;
+    }
+    el.classList.remove("visible");
+}
+
+function setConnectionState(nextState = {}) {
+    if (typeof nextState.internet === "boolean") _connectionState.internet = nextState.internet;
+    if (typeof nextState.server === "boolean") _connectionState.server = nextState.server;
+    renderConnectionBanner();
+}
+
+async function checkServerConnection() {
+    if (!navigator.onLine) {
+        setConnectionState({ internet: false, server: false });
+        return false;
+    }
+    try {
+        const res = await _nativeFetch(`/api/online_status?t=${Date.now()}`, { cache: "no-store" });
+        const ok = !!res && res.ok;
+        setConnectionState({ internet: true, server: ok });
+        return ok;
+    } catch {
+        setConnectionState({ internet: true, server: false });
+        return false;
+    }
+}
+
+function installOfflineAwareFetch() {
+    if (window.__levartOfflineFetchInstalled) return;
+    window.__levartOfflineFetchInstalled = true;
+    window.fetch = async (input, init = {}) => {
+        const req = new Request(input, init);
+        const method = String((init.method || req.method || "GET")).toUpperCase();
+        let urlObj;
+        try {
+            urlObj = new URL(req.url, window.location.origin);
+        } catch {
+            return _nativeFetch(input, init);
+        }
+        const sameOrigin = urlObj.origin === window.location.origin;
+        const shouldHandle = sameOrigin && method === "GET";
+        const cacheable = shouldHandle && isOfflineCacheablePath(urlObj.pathname);
+
+        if (!shouldHandle) {
+            return _nativeFetch(input, init);
+        }
+
+        try {
+            const response = await _nativeFetch(input, init);
+            if (navigator.onLine) setConnectionState({ internet: true, server: true });
+            if (cacheable && response?.ok) {
+                await saveApiResponseToOfflineCache(urlObj, response.clone());
+            }
+            return response;
+        } catch (err) {
+            if (navigator.onLine) setConnectionState({ internet: true, server: false });
+            if (cacheable) {
+                const cachedResponse = loadApiResponseFromOfflineCache(urlObj);
+                if (cachedResponse) return cachedResponse;
+            }
+            throw err;
+        }
+    };
+}
+
+function registerLavertServiceWorker() {
+    if (!("serviceWorker" in navigator)) return;
+    window.addEventListener("load", () => {
+        navigator.serviceWorker.register("/static/sw.js").catch(() => {});
+    }, { once: true });
+}
+
+function initConnectionMonitor() {
+    if (_connectionMonitorStarted) return;
+    _connectionMonitorStarted = true;
+    installOfflineAwareFetch();
+    registerLavertServiceWorker();
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", () => {
+            ensureConnectionBannerElement();
+            renderConnectionBanner();
+        }, { once: true });
+    } else {
+        ensureConnectionBannerElement();
+        renderConnectionBanner();
+    }
+    window.addEventListener("online", () => {
+        setConnectionState({ internet: true });
+        checkServerConnection();
+    });
+    window.addEventListener("offline", () => {
+        setConnectionState({ internet: false, server: false });
+    });
+    checkServerConnection();
+    _connectionPingTimer = setInterval(checkServerConnection, 15000);
+}
+
+initConnectionMonitor();
 
 
 // ─── КЭШИРОВАННЫЕ ПРЕВЬЮ СООБЩЕНИЙ ───────────────────────────────

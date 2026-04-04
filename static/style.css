@@ -8680,3 +8680,40 @@ body.center {
     padding-bottom: calc(112px + var(--vk-bottom, 0px) + env(safe-area-inset-bottom)) !important;
   }
 }
+
+/* ===== 40. Connection Banner (offline / server down) ===== */
+.connection-status-banner {
+  position: fixed;
+  left: 50%;
+  bottom: calc(14px + env(safe-area-inset-bottom));
+  transform: translate(-50%, 18px);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 15000;
+  max-width: min(92vw, 520px);
+  padding: 10px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.94), rgba(30, 41, 59, 0.96));
+  color: #e5edff;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  box-shadow: 0 14px 34px rgba(2, 6, 23, 0.55);
+  backdrop-filter: blur(8px);
+  transition: opacity 0.26s ease, transform 0.26s ease;
+}
+
+.connection-status-banner.visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+@media (max-width: 900px) {
+  .connection-status-banner {
+    width: min(94vw, 460px);
+    font-size: 12px;
+    padding: 9px 12px;
+    border-radius: 10px;
+  }
+}
