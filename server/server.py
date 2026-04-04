@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify, render_template, send_from_directory, redirect, Response, stream_with_context
 from flask_socketio import SocketIO, emit
-import json, os, time, uuid, tempfile, subprocess, shutil, logging, sqlite3, threading
+import json, os, time, uuid, tempfile, subprocess, shutil, logging, sqlite3, threading, base64, sys
 from urllib.parse import unquote
 
 try:
@@ -119,6 +119,7 @@ STORAGE_PROXY_DOWNLOADS = os.getenv("STORAGE_PROXY_DOWNLOADS", "1").strip().lowe
 STORAGE_FALLBACK_LOCAL = os.getenv("STORAGE_FALLBACK_LOCAL", "1").strip().lower() not in ("0", "false", "no")
 STATE_SYNC_TO_OBJECT_STORAGE = os.getenv("STATE_SYNC_TO_OBJECT_STORAGE", "1").strip().lower() not in ("0", "false", "no")
 STATE_SYNC_STRICT = os.getenv("STATE_SYNC_STRICT", "1").strip().lower() not in ("0", "false", "no")
+STATE_STORAGE_SUBPROCESS = os.getenv("STATE_STORAGE_SUBPROCESS", "1").strip().lower() not in ("0", "false", "no")
 STATE_OBJECT_PREFIX = os.getenv("STATE_OBJECT_PREFIX", "state/json_store").strip().strip("/")
 
 _r2_client = None
@@ -426,6 +427,74 @@ def _r2_enabled():
 def _state_storage_enabled():
     return _r2_enabled() and STATE_SYNC_TO_OBJECT_STORAGE
 
+_STATE_SUBPROCESS_SCRIPT = r"""
+import os, sys, json, base64
+import boto3
+from botocore.config import Config
+
+action = sys.argv[1]
+endpoint = os.environ.get("STORAGE_ENDPOINT_URL", "").strip()
+key_id = os.environ.get("STORAGE_ACCESS_KEY_ID", "").strip()
+secret = os.environ.get("STORAGE_SECRET_ACCESS_KEY", "").strip()
+bucket = os.environ.get("STORAGE_BUCKET_NAME", "").strip()
+region = os.environ.get("STORAGE_REGION", "us-east-1").strip() or "us-east-1"
+obj_key = os.environ.get("STORAGE_OBJECT_KEY", "").strip()
+content_type = os.environ.get("STORAGE_CONTENT_TYPE", "application/json; charset=utf-8").strip()
+
+if not (endpoint and key_id and secret and bucket and obj_key):
+    print("missing_env")
+    raise SystemExit(3)
+
+s3 = boto3.client(
+    "s3",
+    endpoint_url=endpoint,
+    aws_access_key_id=key_id,
+    aws_secret_access_key=secret,
+    region_name=region,
+    config=Config(signature_version="s3v4", s3={"addressing_style": "path"}, connect_timeout=8, read_timeout=120),
+)
+
+if action == "get":
+    try:
+        obj = s3.get_object(Bucket=bucket, Key=obj_key)
+    except Exception:
+        raise SystemExit(2)
+    body = obj.get("Body").read() if obj.get("Body") is not None else b""
+    sys.stdout.write(base64.b64encode(body).decode("ascii"))
+    raise SystemExit(0)
+
+if action == "put":
+    raw_b64 = sys.stdin.read()
+    payload = base64.b64decode(raw_b64.encode("ascii")) if raw_b64 else b""
+    s3.put_object(Bucket=bucket, Key=obj_key, Body=payload, ContentType=content_type)
+    sys.stdout.write("ok")
+    raise SystemExit(0)
+
+raise SystemExit(4)
+"""
+
+def _state_storage_subprocess_call(action, key, payload_bytes=None):
+    env = os.environ.copy()
+    env["STORAGE_ENDPOINT_URL"] = STORAGE_ENDPOINT_URL or ""
+    env["STORAGE_ACCESS_KEY_ID"] = STORAGE_ACCESS_KEY_ID or ""
+    env["STORAGE_SECRET_ACCESS_KEY"] = STORAGE_SECRET_ACCESS_KEY or ""
+    env["STORAGE_BUCKET_NAME"] = STORAGE_BUCKET_NAME or ""
+    env["STORAGE_REGION"] = STORAGE_REGION or "us-east-1"
+    env["STORAGE_OBJECT_KEY"] = key or ""
+    env["STORAGE_CONTENT_TYPE"] = "application/json; charset=utf-8"
+    input_data = None
+    if payload_bytes is not None:
+        input_data = base64.b64encode(payload_bytes).decode("ascii")
+    proc = subprocess.run(
+        [sys.executable, "-c", _STATE_SUBPROCESS_SCRIPT, action],
+        input=input_data,
+        text=True,
+        capture_output=True,
+        env=env,
+        timeout=35,
+    )
+    return proc
+
 def _state_object_key(path):
     clean = str(path or "").strip().replace("\\", "/").lstrip("/")
     if clean.lower().endswith(".json"):
@@ -475,11 +544,17 @@ def _state_read_from_object(path):
     canonical = _state_object_key(path)
     for key in _state_object_candidate_keys(path):
         try:
-            obj = _r2_client.get_object(Bucket=STORAGE_BUCKET_NAME, Key=key)
-            body = obj.get("Body")
-            if body is None:
-                continue
-            raw = body.read()
+            if STATE_STORAGE_SUBPROCESS:
+                proc = _state_storage_subprocess_call("get", key, None)
+                if proc.returncode != 0:
+                    continue
+                raw = base64.b64decode((proc.stdout or "").encode("ascii")) if (proc.stdout or "").strip() else b""
+            else:
+                obj = _r2_client.get_object(Bucket=STORAGE_BUCKET_NAME, Key=key)
+                body = obj.get("Body")
+                if body is None:
+                    continue
+                raw = body.read()
             if not raw:
                 continue
             data = json.loads(raw.decode("utf-8"))
@@ -497,12 +572,18 @@ def _state_write_to_object(path, data):
     key = _state_object_key(path)
     try:
         payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
-        _r2_client.put_object(
-            Bucket=STORAGE_BUCKET_NAME,
-            Key=key,
-            Body=payload,
-            ContentType="application/json; charset=utf-8",
-        )
+        if STATE_STORAGE_SUBPROCESS:
+            proc = _state_storage_subprocess_call("put", key, payload)
+            if proc.returncode != 0:
+                app.logger.warning("State object subprocess sync failed for %s: rc=%s err=%s", path, proc.returncode, (proc.stderr or "").strip())
+                return False
+        else:
+            _r2_client.put_object(
+                Bucket=STORAGE_BUCKET_NAME,
+                Key=key,
+                Body=payload,
+                ContentType="application/json; charset=utf-8",
+            )
         return True
     except Exception as e:
         app.logger.warning("State object sync failed for %s: %s", path, e)
@@ -1974,6 +2055,7 @@ def storage_status():
         "state_sync": bool(STATE_SYNC_TO_OBJECT_STORAGE),
         "state_sync_strict": bool(STATE_SYNC_STRICT),
         "object_storage_primary": bool(STATE_SYNC_STRICT and _state_storage_enabled()),
+        "state_storage_subprocess": bool(STATE_STORAGE_SUBPROCESS),
         "upload_fallback_local": bool(STORAGE_FALLBACK_LOCAL),
     })
 
