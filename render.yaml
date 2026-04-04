@@ -8,3 +8,9 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.11
+      - key: STATE_SYNC_TO_OBJECT_STORAGE
+        value: "1"
+      - key: STATE_SYNC_STRICT
+        value: "1"
+      - key: STORAGE_FALLBACK_LOCAL
+        value: "0"

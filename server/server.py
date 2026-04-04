@@ -72,19 +72,40 @@ os.makedirs(os.path.join(UPLOAD_FOLDER, 'files'),  exist_ok=True)
 os.makedirs(os.path.join(UPLOAD_FOLDER, 'avatars'), exist_ok=True)
 
 # Cloudflare R2 (S3-compatible) storage config
-R2_ENDPOINT_URL = os.getenv("R2_ENDPOINT_URL", "").strip()
-R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID", "").strip()
-R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY", "").strip()
-R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME", "").strip()
-R2_PUBLIC_BASE_URL = os.getenv("R2_PUBLIC_BASE_URL", "").strip().rstrip("/")
+R2_ENDPOINT_URL = os.getenv("R2_ENDPOINT_URL", "").strip() or os.getenv("R2_ENDPOINT", "").strip()
+R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID", "").strip() or os.getenv("R2_KEY_ID", "").strip()
+R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY", "").strip() or os.getenv("R2_APPLICATION_KEY", "").strip()
+R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME", "").strip() or os.getenv("R2_BUCKET", "").strip()
+R2_PUBLIC_BASE_URL = (os.getenv("R2_PUBLIC_BASE_URL", "").strip() or os.getenv("R2_PUBLIC_URL", "").strip()).rstrip("/")
 R2_PRESIGN_TTL = int(os.getenv("R2_PRESIGN_TTL", "3600"))
 
 # Backblaze B2 S3-compatible storage config (alternative)
-B2_ENDPOINT = os.getenv("B2_ENDPOINT", "").strip()
-B2_KEY_ID = os.getenv("B2_KEY_ID", "").strip()
-B2_APPLICATION_KEY = os.getenv("B2_APPLICATION_KEY", "").strip()
-B2_BUCKET_NAME = os.getenv("B2_BUCKET_NAME", "").strip()
-B2_PUBLIC_BASE_URL = os.getenv("B2_PUBLIC_BASE_URL", "").strip().rstrip("/")
+B2_ENDPOINT = (
+    os.getenv("B2_ENDPOINT", "").strip()
+    or os.getenv("B2_S3_ENDPOINT", "").strip()
+    or os.getenv("S3_ENDPOINT", "").strip()
+)
+B2_KEY_ID = (
+    os.getenv("B2_KEY_ID", "").strip()
+    or os.getenv("B2_APPLICATION_KEY_ID", "").strip()
+    or os.getenv("B2_ACCESS_KEY_ID", "").strip()
+    or os.getenv("AWS_ACCESS_KEY_ID", "").strip()
+)
+B2_APPLICATION_KEY = (
+    os.getenv("B2_APPLICATION_KEY", "").strip()
+    or os.getenv("B2_APP_KEY", "").strip()
+    or os.getenv("B2_SECRET_ACCESS_KEY", "").strip()
+    or os.getenv("AWS_SECRET_ACCESS_KEY", "").strip()
+)
+B2_BUCKET_NAME = (
+    os.getenv("B2_BUCKET_NAME", "").strip()
+    or os.getenv("B2_BUCKET", "").strip()
+    or os.getenv("S3_BUCKET", "").strip()
+)
+B2_PUBLIC_BASE_URL = (
+    os.getenv("B2_PUBLIC_BASE_URL", "").strip()
+    or os.getenv("B2_PUBLIC_URL", "").strip()
+).rstrip("/")
 B2_PRESIGN_TTL = int(os.getenv("B2_PRESIGN_TTL", "3600"))
 
 STORAGE_ENDPOINT_URL = R2_ENDPOINT_URL or B2_ENDPOINT
@@ -97,6 +118,7 @@ STORAGE_REGION = os.getenv("STORAGE_REGION", "").strip() or os.getenv("AWS_REGIO
 STORAGE_PROXY_DOWNLOADS = os.getenv("STORAGE_PROXY_DOWNLOADS", "1").strip().lower() not in ("0", "false", "no")
 STORAGE_FALLBACK_LOCAL = os.getenv("STORAGE_FALLBACK_LOCAL", "1").strip().lower() not in ("0", "false", "no")
 STATE_SYNC_TO_OBJECT_STORAGE = os.getenv("STATE_SYNC_TO_OBJECT_STORAGE", "1").strip().lower() not in ("0", "false", "no")
+STATE_SYNC_STRICT = os.getenv("STATE_SYNC_STRICT", "1").strip().lower() not in ("0", "false", "no")
 STATE_OBJECT_PREFIX = os.getenv("STATE_OBJECT_PREFIX", "state/json_store").strip().strip("/")
 
 _r2_client = None
@@ -106,6 +128,7 @@ if boto3 and STORAGE_ENDPOINT_URL and STORAGE_ACCESS_KEY_ID and STORAGE_SECRET_A
         if BotoConfig is not None:
             client_kwargs["config"] = BotoConfig(
                 signature_version="s3v4",
+                s3={"addressing_style": "path"},
                 connect_timeout=8,
                 read_timeout=120,
                 max_pool_connections=50,
@@ -119,6 +142,8 @@ if boto3 and STORAGE_ENDPOINT_URL and STORAGE_ACCESS_KEY_ID and STORAGE_SECRET_A
             region_name=STORAGE_REGION,
             **client_kwargs
         )
+        # Validate that credentials + bucket are actually usable.
+        _r2_client.head_bucket(Bucket=STORAGE_BUCKET_NAME)
     except Exception:
         _r2_client = None
 
@@ -315,7 +340,9 @@ def load_json(path):
                     (p, payload, now_ts)
                 )
             conn.commit()
-            _state_write_to_object(p, data)
+            ok_sync = _state_write_to_object(p, data)
+            if STATE_SYNC_STRICT and not ok_sync:
+                app.logger.error("State sync strict mode: failed to write %s to object storage", p)
             return data
         except Exception as e:
             msg = str(e).lower()
@@ -359,7 +386,9 @@ def save_json(path, data):
                     (p, payload, now_ts)
                 )
             conn.commit()
-            _state_write_to_object(p, data)
+            ok_sync = _state_write_to_object(p, data)
+            if STATE_SYNC_STRICT and not ok_sync:
+                raise RuntimeError(f"state_sync_failed:{p}")
             return
         except Exception as e:
             msg = str(e).lower()
@@ -443,7 +472,7 @@ def _state_read_from_object(path):
 
 def _state_write_to_object(path, data):
     if not _state_storage_enabled():
-        return
+        return False
     key = _state_object_key(path)
     try:
         payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
@@ -453,8 +482,10 @@ def _state_write_to_object(path, data):
             Body=payload,
             ContentType="application/json; charset=utf-8",
         )
+        return True
     except Exception as e:
         app.logger.warning("State object sync failed for %s: %s", path, e)
+        return False
 
 def _r2_object_key(folder, filename):
     return f"uploads/{folder}/{filename}"
@@ -1902,6 +1933,23 @@ def handle_disconnect():
 @app.route("/api/online_status")
 def online_status():
     return jsonify(list(_online_users.keys()))
+
+@app.route("/api/storage_status")
+def storage_status():
+    backend = "none"
+    if R2_ENDPOINT_URL:
+        backend = "r2"
+    elif B2_ENDPOINT:
+        backend = "b2"
+    return jsonify({
+        "backend": backend,
+        "client_ready": _r2_enabled(),
+        "bucket": STORAGE_BUCKET_NAME or "",
+        "endpoint": STORAGE_ENDPOINT_URL or "",
+        "state_sync": bool(STATE_SYNC_TO_OBJECT_STORAGE),
+        "state_sync_strict": bool(STATE_SYNC_STRICT),
+        "upload_fallback_local": bool(STORAGE_FALLBACK_LOCAL),
+    })
 
 @socketio.on("send_message")
 def handle_message(packet):
