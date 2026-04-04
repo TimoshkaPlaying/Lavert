@@ -253,6 +253,15 @@ def load_json(path):
     p = str(path or "").strip()
     if not p:
         return {}
+    # In strict object-storage mode use B2/R2 as primary source of truth.
+    if STATE_SYNC_STRICT and _state_storage_enabled():
+        state_data = _state_read_from_object(p)
+        if state_data is not None:
+            return state_data
+        data = _load_json_file(p) if JSON_FILE_FALLBACK else _default_dataset(p)
+        if not _state_write_to_object(p, data):
+            raise RuntimeError(f"state_sync_failed:{p}")
+        return data
     _ensure_db()
     for attempt in range(8):
         conn = _db_connect()
@@ -361,6 +370,11 @@ def load_json(path):
 def save_json(path, data):
     p = str(path or "").strip()
     if not p:
+        return
+    # In strict object-storage mode write to B2/R2 first and do not fail on local DB issues.
+    if STATE_SYNC_STRICT and _state_storage_enabled():
+        if not _state_write_to_object(p, data):
+            raise RuntimeError(f"state_sync_failed:{p}")
         return
     _ensure_db()
     payload = json.dumps(data, ensure_ascii=False)
@@ -1959,6 +1973,7 @@ def storage_status():
         "endpoint": STORAGE_ENDPOINT_URL or "",
         "state_sync": bool(STATE_SYNC_TO_OBJECT_STORAGE),
         "state_sync_strict": bool(STATE_SYNC_STRICT),
+        "object_storage_primary": bool(STATE_SYNC_STRICT and _state_storage_enabled()),
         "upload_fallback_local": bool(STORAGE_FALLBACK_LOCAL),
     })
 
