@@ -1584,6 +1584,8 @@ function ensureDesktopNotificationsPermission() {
  * ==========================================
  */
 window.register = async () => {
+    if (window.__levartAuthBusy) return;
+    window.__levartAuthBusy = true;
     const firstNameEl = document.getElementById("firstName");
     const lastNameEl = document.getElementById("lastName");
     const usernameEl = document.getElementById("regUser");
@@ -1632,12 +1634,15 @@ window.register = async () => {
             })
         });
         
-        const result = await res.json();
+        const result = await res.json().catch(() => ({}));
         
         if (res.ok) {
             // Экспортируем приватный ключ для постоянной сессии браузера
             const privRaw = await crypto.subtle.exportKey("pkcs8", keyPair.privateKey);
-            const privBase64 = btoa(String.fromCharCode(...new Uint8Array(privRaw)));
+            const privBytes = new Uint8Array(privRaw);
+            let privStr = "";
+            for (let i = 0; i < privBytes.length; i++) privStr += String.fromCharCode(privBytes[i]);
+            const privBase64 = btoa(privStr);
             
             const keyObj = JSON.stringify({ pub: pubKeyB64, priv: privBase64 });
             persistAuthSession(u, keyObj, p);
@@ -1646,17 +1651,21 @@ window.register = async () => {
             showToast(UI_TEXT.REG_SUCCESS);
             setTimeout(() => window.location.replace(ROUTES.MAIN), SETTINGS.REDIRECTION_DELAY);
         } else {
-            showToast(result.error, "error");
+            showToast(result?.error || "Ошибка регистрации", "error");
             hideAppLoader(80);
         }
     } catch (err) {
         console.error("Registration error:", err);
-        showToast(UI_TEXT.CRYPTO_ERR_KEYS, "error");
+        showToast("Ошибка регистрации или сохранения ключа", "error");
         hideAppLoader(80);
+    } finally {
+        window.__levartAuthBusy = false;
     }
 };
 
 window.login = async () => {
+    if (window.__levartAuthBusy) return;
+    window.__levartAuthBusy = true;
     const usernameEl = document.getElementById("loginUser");
     const passwordEl = document.getElementById("loginPass");
     
@@ -1680,7 +1689,7 @@ window.login = async () => {
             body: JSON.stringify({ username: u, password: hashedPassword })
         });
         
-        const result = await res.json();
+        const result = await res.json().catch(() => ({}));
         
         if (res.ok) {
             let encryptedPrivKey = await getKeyFromDB(u);
@@ -1713,7 +1722,10 @@ window.login = async () => {
                 
                 // Экспортируем приватный ключ в формат для локальной сессии
                 const privRaw = await crypto.subtle.exportKey("pkcs8", privateKey);
-                const privBase64 = btoa(String.fromCharCode(...new Uint8Array(privRaw)));
+                const privBytes = new Uint8Array(privRaw);
+                let privStr = "";
+                for (let i = 0; i < privBytes.length; i++) privStr += String.fromCharCode(privBytes[i]);
+                const privBase64 = btoa(privStr);
                 
                 // Публичный ключ берем с сервера
                 const pub = result.public_key;
@@ -1736,6 +1748,8 @@ window.login = async () => {
         console.error("Login error:", err);
         showToast("Ошибка входа", "error");
         hideAppLoader(80);
+    } finally {
+        window.__levartAuthBusy = false;
     }
 };
 

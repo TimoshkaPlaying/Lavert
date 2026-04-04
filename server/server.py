@@ -316,6 +316,11 @@ def load_json(path):
                 return state_data
             # SQL-first mode: by default, do not read legacy JSON files from repo.
             data = _load_json_file(p) if JSON_FILE_FALLBACK else _default_dataset(p)
+            # Strict mode: never seed DB with data that wasn't written to object storage.
+            if STATE_SYNC_STRICT and _state_storage_enabled():
+                ok_sync = _state_write_to_object(p, data)
+                if not ok_sync:
+                    raise RuntimeError(f"state_sync_failed:{p}")
             payload = json.dumps(data, ensure_ascii=False)
             now_ts = time.time()
             if _db_use_postgres:
@@ -340,9 +345,8 @@ def load_json(path):
                     (p, payload, now_ts)
                 )
             conn.commit()
-            ok_sync = _state_write_to_object(p, data)
-            if STATE_SYNC_STRICT and not ok_sync:
-                app.logger.error("State sync strict mode: failed to write %s to object storage", p)
+            if not STATE_SYNC_STRICT:
+                _state_write_to_object(p, data)
             return data
         except Exception as e:
             msg = str(e).lower()
@@ -360,6 +364,10 @@ def save_json(path, data):
         return
     _ensure_db()
     payload = json.dumps(data, ensure_ascii=False)
+    if STATE_SYNC_STRICT and _state_storage_enabled():
+        ok_sync = _state_write_to_object(p, data)
+        if not ok_sync:
+            raise RuntimeError(f"state_sync_failed:{p}")
     for attempt in range(8):
         conn = _db_connect()
         try:
@@ -386,9 +394,8 @@ def save_json(path, data):
                     (p, payload, now_ts)
                 )
             conn.commit()
-            ok_sync = _state_write_to_object(p, data)
-            if STATE_SYNC_STRICT and not ok_sync:
-                raise RuntimeError(f"state_sync_failed:{p}")
+            if not STATE_SYNC_STRICT:
+                _state_write_to_object(p, data)
             return
         except Exception as e:
             msg = str(e).lower()
@@ -1135,24 +1142,28 @@ def landing(): return render_template("landing.html")
 @app.route("/register", methods=["GET", "POST"])
 def register_page():
     if request.method == "POST":
-        data = request.json
-        users = load_json(USERS_FILE)
-        username = data.get("username", "").strip().lower()
-        if username in users:
-            return jsonify({"error": "Пользователь уже существует"}), 400
-        users[username] = {
-            "password":   data["password"],
-            "public_key": data["public_key"],
-            "first_name": data.get("first_name", ""),
-            "last_name":  data.get("last_name", ""),
-            "bio":        "",
-            "birthdate":  "",
-            "friends":    []
-        }
-        save_json(USERS_FILE, users)
-        auth_token = _issue_auth_token(username)
-        # Аватар при регистрации не нужен — он будет в avatars.json
-        return jsonify({"status": "ok", "auth_token": auth_token})
+        try:
+            data = request.json or {}
+            users = load_json(USERS_FILE) or {}
+            username = data.get("username", "").strip().lower()
+            if username in users:
+                return jsonify({"error": "Пользователь уже существует"}), 400
+            users[username] = {
+                "password":   data["password"],
+                "public_key": data["public_key"],
+                "first_name": data.get("first_name", ""),
+                "last_name":  data.get("last_name", ""),
+                "bio":        "",
+                "birthdate":  "",
+                "friends":    []
+            }
+            save_json(USERS_FILE, users)
+            auth_token = _issue_auth_token(username)
+            # Аватар при регистрации не нужен — он будет в avatars.json
+            return jsonify({"status": "ok", "auth_token": auth_token})
+        except Exception as e:
+            app.logger.exception("Register failed: %s", e)
+            return jsonify({"error": "Ошибка сохранения данных. Повторите позже."}), 503
     return render_template("register.html")
 
 @app.route("/login", methods=["GET", "POST"])
@@ -1950,6 +1961,29 @@ def storage_status():
         "state_sync_strict": bool(STATE_SYNC_STRICT),
         "upload_fallback_local": bool(STORAGE_FALLBACK_LOCAL),
     })
+
+@app.route("/api/storage_probe")
+def storage_probe():
+    if not _r2_enabled():
+        return jsonify({"ok": False, "error": "storage_client_not_ready"}), 503
+    try:
+        probe_key = f"{STATE_OBJECT_PREFIX}/_probe_{int(time.time())}.json" if STATE_OBJECT_PREFIX else f"_probe_{int(time.time())}.json"
+        _r2_client.put_object(
+            Bucket=STORAGE_BUCKET_NAME,
+            Key=probe_key,
+            Body=b'{"ok":true}',
+            ContentType="application/json; charset=utf-8",
+        )
+        listed = _r2_client.list_objects_v2(
+            Bucket=STORAGE_BUCKET_NAME,
+            Prefix=(STATE_OBJECT_PREFIX + "/") if STATE_OBJECT_PREFIX else "",
+            MaxKeys=20
+        )
+        keys = [obj.get("Key", "") for obj in listed.get("Contents", []) if obj.get("Key")]
+        return jsonify({"ok": True, "probe_key": probe_key, "sample_keys": keys[:20]})
+    except Exception as e:
+        app.logger.exception("storage probe failed: %s", e)
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 @socketio.on("send_message")
 def handle_message(packet):
