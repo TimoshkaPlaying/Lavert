@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify, render_template, send_from_directory, redirect, Response, stream_with_context
 from flask_socketio import SocketIO, emit
-import json, os, time, uuid, tempfile, subprocess, shutil, logging, sqlite3, threading, base64, sys
+import json, os, time, uuid, tempfile, subprocess, shutil, logging, sqlite3, threading, base64, sys, copy
 from urllib.parse import unquote
 
 try:
@@ -118,8 +118,10 @@ STORAGE_REGION = os.getenv("STORAGE_REGION", "").strip() or os.getenv("AWS_REGIO
 STORAGE_PROXY_DOWNLOADS = os.getenv("STORAGE_PROXY_DOWNLOADS", "1").strip().lower() not in ("0", "false", "no")
 STORAGE_FALLBACK_LOCAL = os.getenv("STORAGE_FALLBACK_LOCAL", "1").strip().lower() not in ("0", "false", "no")
 STATE_SYNC_TO_OBJECT_STORAGE = os.getenv("STATE_SYNC_TO_OBJECT_STORAGE", "1").strip().lower() not in ("0", "false", "no")
-STATE_SYNC_STRICT = os.getenv("STATE_SYNC_STRICT", "1").strip().lower() not in ("0", "false", "no")
+STATE_SYNC_STRICT = os.getenv("STATE_SYNC_STRICT", "0").strip().lower() not in ("0", "false", "no")
 STATE_STORAGE_SUBPROCESS = os.getenv("STATE_STORAGE_SUBPROCESS", "1").strip().lower() not in ("0", "false", "no")
+STATE_SYNC_BLOCKING = os.getenv("STATE_SYNC_BLOCKING", "0").strip().lower() not in ("0", "false", "no")
+STATE_CACHE_TTL_SEC = float(os.getenv("STATE_CACHE_TTL_SEC", "2.0") or "2.0")
 STATE_OBJECT_PREFIX = os.getenv("STATE_OBJECT_PREFIX", "state/json_store").strip().strip("/")
 
 _r2_client = None
@@ -168,6 +170,42 @@ _db_use_postgres = bool(DATABASE_URL and DATABASE_URL.startswith(("postgres://",
 JSON_FILE_FALLBACK = os.getenv("JSON_FILE_FALLBACK", "0").strip().lower() in ("1", "true", "yes")
 _db_init_done = False
 _db_lock = threading.Lock()
+_json_state_cache = {}
+_json_state_cache_lock = threading.RLock()
+_state_sync_dirty = set()
+_state_sync_latest = {}
+_state_sync_lock = threading.RLock()
+_state_sync_worker_started = False
+
+def _clone_json_data(data):
+    try:
+        return copy.deepcopy(data)
+    except Exception:
+        try:
+            return json.loads(json.dumps(data, ensure_ascii=False))
+        except Exception:
+            return data
+
+def _cache_get(path):
+    key = str(path or "").strip()
+    if not key or STATE_CACHE_TTL_SEC <= 0:
+        return None
+    now_ts = time.time()
+    with _json_state_cache_lock:
+        item = _json_state_cache.get(key)
+        if not item:
+            return None
+        if now_ts - float(item.get("ts", 0.0)) > STATE_CACHE_TTL_SEC:
+            _json_state_cache.pop(key, None)
+            return None
+        return _clone_json_data(item.get("data"))
+
+def _cache_put(path, data):
+    key = str(path or "").strip()
+    if not key:
+        return
+    with _json_state_cache_lock:
+        _json_state_cache[key] = {"ts": time.time(), "data": _clone_json_data(data)}
 
 def _load_json_file(path):
     if not os.path.exists(path):
@@ -254,15 +292,9 @@ def load_json(path):
     p = str(path or "").strip()
     if not p:
         return {}
-    # In strict object-storage mode use B2/R2 as primary source of truth.
-    if STATE_SYNC_STRICT and _state_storage_enabled():
-        state_data = _state_read_from_object(p)
-        if state_data is not None:
-            return state_data
-        data = _load_json_file(p) if JSON_FILE_FALLBACK else _default_dataset(p)
-        if not _state_write_to_object(p, data):
-            app.logger.warning("State strict read fallback for %s: object storage unavailable, serving default", p)
-        return data
+    cached = _cache_get(p)
+    if cached is not None:
+        return cached
     _ensure_db()
     for attempt in range(8):
         conn = _db_connect()
@@ -275,7 +307,9 @@ def load_json(path):
                 row = conn.execute("SELECT payload FROM json_store WHERE path = ?", (p,)).fetchone()
             if row and row[0]:
                 try:
-                    return json.loads(row[0])
+                    loaded = json.loads(row[0])
+                    _cache_put(p, loaded)
+                    return loaded
                 except Exception:
                     return {}
             if _db_use_postgres:
@@ -295,6 +329,7 @@ def load_json(path):
                             (p, payload, now_ts)
                         )
                     conn.commit()
+                    _cache_put(p, sqlite_data)
                     return sqlite_data
             # Restore dataset from object storage (B2/R2) if available.
             state_data = _state_read_from_object(p)
@@ -323,14 +358,10 @@ def load_json(path):
                         (p, payload, now_ts)
                     )
                 conn.commit()
+                _cache_put(p, state_data)
                 return state_data
             # SQL-first mode: by default, do not read legacy JSON files from repo.
             data = _load_json_file(p) if JSON_FILE_FALLBACK else _default_dataset(p)
-            # Strict mode: never seed DB with data that wasn't written to object storage.
-            if STATE_SYNC_STRICT and _state_storage_enabled():
-                ok_sync = _state_write_to_object(p, data)
-                if not ok_sync:
-                    raise RuntimeError(f"state_sync_failed:{p}")
             payload = json.dumps(data, ensure_ascii=False)
             now_ts = time.time()
             if _db_use_postgres:
@@ -355,8 +386,12 @@ def load_json(path):
                     (p, payload, now_ts)
                 )
             conn.commit()
-            if not STATE_SYNC_STRICT:
-                _state_write_to_object(p, data)
+            _cache_put(p, data)
+            if _state_storage_enabled():
+                if STATE_SYNC_STRICT and STATE_SYNC_BLOCKING:
+                    _state_write_to_object(p, data)
+                else:
+                    _enqueue_state_sync(p, data)
             return data
         except Exception as e:
             msg = str(e).lower()
@@ -372,17 +407,9 @@ def save_json(path, data):
     p = str(path or "").strip()
     if not p:
         return
-    # In strict object-storage mode write to B2/R2 first and do not fail on local DB issues.
-    if STATE_SYNC_STRICT and _state_storage_enabled():
-        if not _state_write_to_object(p, data):
-            raise RuntimeError(f"state_sync_failed:{p}")
-        return
+    _cache_put(p, data)
     _ensure_db()
     payload = json.dumps(data, ensure_ascii=False)
-    if STATE_SYNC_STRICT and _state_storage_enabled():
-        ok_sync = _state_write_to_object(p, data)
-        if not ok_sync:
-            raise RuntimeError(f"state_sync_failed:{p}")
     for attempt in range(8):
         conn = _db_connect()
         try:
@@ -409,8 +436,11 @@ def save_json(path, data):
                     (p, payload, now_ts)
                 )
             conn.commit()
-            if not STATE_SYNC_STRICT:
-                _state_write_to_object(p, data)
+            if _state_storage_enabled():
+                if STATE_SYNC_STRICT and STATE_SYNC_BLOCKING:
+                    _state_write_to_object(p, data)
+                else:
+                    _enqueue_state_sync(p, data)
             return
         except Exception as e:
             msg = str(e).lower()
@@ -426,6 +456,44 @@ def _r2_enabled():
 
 def _state_storage_enabled():
     return _r2_enabled() and STATE_SYNC_TO_OBJECT_STORAGE
+
+def _state_sync_worker_loop():
+    while True:
+        path = None
+        payload = None
+        with _state_sync_lock:
+            if _state_sync_dirty:
+                path = _state_sync_dirty.pop()
+                payload = _state_sync_latest.get(path)
+        if not path:
+            time.sleep(0.08)
+            continue
+        try:
+            _state_write_to_object(path, payload)
+        except Exception:
+            pass
+
+def _ensure_state_sync_worker():
+    global _state_sync_worker_started
+    if _state_sync_worker_started:
+        return
+    with _state_sync_lock:
+        if _state_sync_worker_started:
+            return
+        th = threading.Thread(target=_state_sync_worker_loop, daemon=True, name="state_sync_worker")
+        th.start()
+        _state_sync_worker_started = True
+
+def _enqueue_state_sync(path, data):
+    if not _state_storage_enabled():
+        return
+    p = str(path or "").strip()
+    if not p:
+        return
+    _ensure_state_sync_worker()
+    with _state_sync_lock:
+        _state_sync_latest[p] = _clone_json_data(data)
+        _state_sync_dirty.add(p)
 
 _STATE_SUBPROCESS_SCRIPT = r"""
 import os, sys, json, base64
@@ -1242,6 +1310,13 @@ def register_page():
             users = load_json(USERS_FILE) or {}
             username = data.get("username", "").strip().lower()
             if username in users:
+                existing = users.get(username) or {}
+                if (
+                    str(existing.get("password", "")) == str(data.get("password", ""))
+                    and str(existing.get("public_key", "")) == str(data.get("public_key", ""))
+                ):
+                    auth_token = _issue_auth_token(username)
+                    return jsonify({"status": "ok", "auth_token": auth_token, "idempotent": True})
                 return jsonify({"error": "Пользователь уже существует"}), 400
             users[username] = {
                 "password":   data["password"],

@@ -2130,53 +2130,32 @@ window.openChat = async (targetId) => {
     toggleStoriesFocusMode(false);
 
     try {
-        if (!sessionAESKeys[targetId]) {
-            const aesKey = await getAESKeyForPeer(targetId);
-            sessionAESKeys[targetId] = aesKey;
-        }
-        
         window.currentChat = targetId;
-        currentAES = sessionAESKeys[targetId];
+        if (inputArea) inputArea.style.display = "flex";
 
-        if (inputArea) inputArea.style.display = "flex"; 
-
-        // ИСПРАВЛЕНИЕ ЗАГОЛОВКА
+        // Мгновенный фоллбек-хедер: не блокируем открытие чата сетевыми запросами.
         if (chatHeader) {
+            const avatarEl = document.getElementById('chatHeaderAvatar');
+            const headerName = document.getElementById('chatHeaderName');
+            const headerSub = document.getElementById('chatHeaderSub');
+            const headerHint = document.getElementById('chatHeaderHint');
             if (targetId.startsWith("group_")) {
-                const gResp = await fetch(`/api/group_info/${targetId}`);
-                const gData = await gResp.json();
-                const gAvatar = gData.avatar || "";
-                const gName = gData.name || "Группа";
-                const avatarEl = document.getElementById('chatHeaderAvatar');
-                if (gAvatar) {
-                    avatarEl.style.backgroundImage = `url('${gAvatar}')`;
-                    avatarEl.style.backgroundSize = 'cover';
-                    avatarEl.textContent = "";
-                } else {
+                if (avatarEl) {
                     avatarEl.style.backgroundImage = '';
                     avatarEl.textContent = "👥";
                 }
-                document.getElementById('chatHeaderName').textContent = gName;
-                document.getElementById('chatHeaderSub').textContent = `${gData.members?.length || 0} участников`;
-                document.getElementById('chatHeaderHint').textContent = "нажмите для информации →";
+                if (headerName) headerName.textContent = "Группа";
+                if (headerSub) headerSub.textContent = targetId;
+                if (headerHint) headerHint.textContent = "нажмите для информации →";
                 chatHeader.onclick = () => openGroupPanel(targetId);
             } else {
-                // Загружаем профиль чтобы показать имя
-                const pRes = await fetch(`/api/user_profile/${targetId}?me=${username}`);
-                const pData = await pRes.json();
-                const fullName = `${pData.first_name || ''} ${pData.last_name || ''}`.trim() || targetId;
-                const avatarEl = document.getElementById('chatHeaderAvatar');
-                if (pData.avatar) {
-                    avatarEl.style.backgroundImage = `url('${pData.avatar}')`;
-                    avatarEl.style.backgroundSize = 'cover';
-                    avatarEl.textContent = "";
-                } else {
+                if (avatarEl) {
                     avatarEl.style.backgroundImage = '';
-                    avatarEl.textContent = fullName.charAt(0).toUpperCase();
+                    avatarEl.textContent = String(targetId || '?').charAt(0).toUpperCase();
                 }
-                document.getElementById('chatHeaderName').textContent = fullName;
-                document.getElementById('chatHeaderSub').textContent = `@${targetId}`;
-                document.getElementById('chatHeaderHint').textContent = "нажмите для профиля →";
+                if (headerName) headerName.textContent = targetId;
+                if (headerSub) headerSub.textContent = `@${targetId}`;
+                if (headerHint) headerHint.textContent = "нажмите для профиля →";
                 chatHeader.onclick = () => openUserInfo(targetId);
             }
         }
@@ -2188,11 +2167,78 @@ window.openChat = async (targetId) => {
         document.querySelector(`.contact-item[data-peer="${targetId}"] .unread-badge`)?.remove();
         
         if (messagesContainer) messagesContainer.innerHTML = "";
-        if (typeof loadHistory === "function") await loadHistory(targetId);
+        // Подгружаем ключ и историю в фоне, чтобы UI не зависал.
+        (async () => {
+            try {
+                if (!sessionAESKeys[targetId]) {
+                    const aesKey = await getAESKeyForPeer(targetId);
+                    sessionAESKeys[targetId] = aesKey;
+                }
+                currentAES = sessionAESKeys[targetId];
+            } catch (e) {
+                currentAES = null;
+                console.warn("AES init failed:", e);
+            }
+            if (typeof loadHistory === "function") {
+                try { await loadHistory(targetId); } catch {}
+            }
+        })();
+
+        // Обновление точного хедера тоже в фоне.
+        (async () => {
+            if (!chatHeader) return;
+            try {
+                if (targetId.startsWith("group_")) {
+                    const gResp = await fetch(`/api/group_info/${targetId}`);
+                    const gData = await gResp.json();
+                    const gAvatar = gData.avatar || "";
+                    const gName = gData.name || "Группа";
+                    const avatarEl = document.getElementById('chatHeaderAvatar');
+                    if (avatarEl) {
+                        if (gAvatar) {
+                            avatarEl.style.backgroundImage = `url('${gAvatar}')`;
+                            avatarEl.style.backgroundSize = 'cover';
+                            avatarEl.textContent = "";
+                        } else {
+                            avatarEl.style.backgroundImage = '';
+                            avatarEl.textContent = "👥";
+                        }
+                    }
+                    const nameEl = document.getElementById('chatHeaderName');
+                    const subEl = document.getElementById('chatHeaderSub');
+                    if (nameEl) nameEl.textContent = gName;
+                    if (subEl) subEl.textContent = `${gData.members?.length || 0} участников`;
+                } else {
+                    const pRes = await fetch(`/api/user_profile/${targetId}?me=${username}`);
+                    const pData = await pRes.json();
+                    const fullName = `${pData.first_name || ''} ${pData.last_name || ''}`.trim() || targetId;
+                    const avatarEl = document.getElementById('chatHeaderAvatar');
+                    if (avatarEl) {
+                        if (pData.avatar) {
+                            avatarEl.style.backgroundImage = `url('${pData.avatar}')`;
+                            avatarEl.style.backgroundSize = 'cover';
+                            avatarEl.textContent = "";
+                        } else {
+                            avatarEl.style.backgroundImage = '';
+                            avatarEl.textContent = fullName.charAt(0).toUpperCase();
+                        }
+                    }
+                    const nameEl = document.getElementById('chatHeaderName');
+                    const subEl = document.getElementById('chatHeaderSub');
+                    if (nameEl) nameEl.textContent = fullName;
+                    if (subEl) subEl.textContent = `@${targetId}`;
+                }
+            } catch {}
+        })();
         loadChatPins(targetId).catch(() => {});
         if (String(targetId).startsWith('group_')) {
-            const canSend = await canSendByGroupPermission(targetId, 'can_send_messages');
-            if (inputArea) inputArea.style.display = canSend ? "flex" : "none";
+            if (inputArea) inputArea.style.display = "flex";
+            (async () => {
+                try {
+                    const canSend = await canSendByGroupPermission(targetId, 'can_send_messages');
+                    if (inputArea) inputArea.style.display = canSend ? "flex" : "none";
+                } catch {}
+            })();
         } else {
             if (inputArea) inputArea.style.display = "flex";
         }
@@ -7847,6 +7893,24 @@ function renderContactItem(c, list) {
     list.appendChild(div);
 }
 
+function restoreContactsFromOfflineCache(forUser) {
+    const curUser = String(forUser || username || localStorage.getItem('username') || '').trim();
+    if (!curUser) return false;
+    try {
+        const raw = localStorage.getItem(OFFLINE_META_KEY(curUser));
+        const parsed = raw ? JSON.parse(raw) : null;
+        const contacts = Array.isArray(parsed?.contacts) ? parsed.contacts : [];
+        if (!contacts.length) return false;
+        window._allContacts = contacts;
+        const folder = getAllFolders().find(f => f.id === window._activeFolder) || BUILT_IN_FOLDERS[0];
+        renderContactsList(filterContactsByFolder(window._allContacts, folder));
+        renderFolderBar();
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 // ─── Патч syncMyContacts ───────────────────────────────────────────
 // Сохраняем исходную (если она есть) и перезаписываем
 window.syncMyContacts = async function() {
@@ -7881,17 +7945,7 @@ window.syncMyContacts = async function() {
         scheduleOfflinePreload();
     } catch(e) {
         console.error('syncMyContacts error:', e);
-        try {
-            const raw = localStorage.getItem(OFFLINE_META_KEY(curUser));
-            const parsed = raw ? JSON.parse(raw) : null;
-            const contacts = Array.isArray(parsed?.contacts) ? parsed.contacts : [];
-            if (contacts.length) {
-                window._allContacts = contacts;
-                const folder = getAllFolders().find(f => f.id === window._activeFolder) || BUILT_IN_FOLDERS[0];
-                renderContactsList(filterContactsByFolder(window._allContacts, folder));
-                renderFolderBar();
-            }
-        } catch {}
+        restoreContactsFromOfflineCache(curUser);
     }
 };
 
@@ -11614,27 +11668,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         initAttachmentMenu();
     }
     if (path === ROUTES.MAIN && username) {
-        try {
-            await ensureAuthTokenForCurrentUser();
-            const meLabel = document.getElementById("me");
-            if (meLabel) meLabel.innerText = username;
-            // await loadMyFriends();
-            await getMyPersistentKeys();
-            await syncMyContacts();
-            scheduleOfflinePreload();
-            await processInviteJoinFromLink();
-            await loadStoriesFeed();
-            loadAppearanceSettings();
-            clearSearchMode();
-        } catch (e) {
-            console.error('main init failed:', e);
-            const meLabel = document.getElementById("me");
-            if (meLabel) meLabel.innerText = username || '';
-            try { await syncMyContacts(); } catch {}
-            clearSearchMode();
-            showToast('Интерфейс восстановлен в безопасном режиме', 'error');
-        }
-
         const searchInput = document.getElementById('searchUser');
         const searchResults = document.getElementById('search-results');
         if (searchInput) {
@@ -11653,7 +11686,43 @@ document.addEventListener("DOMContentLoaded", async () => {
                 }, 120);
             });
         }
-        hideAppLoader(140);
+        const meLabel = document.getElementById("me");
+        if (meLabel) meLabel.innerText = username || '';
+
+        const hadOfflineContacts = restoreContactsFromOfflineCache(username);
+        if (hadOfflineContacts) {
+            clearSearchMode();
+            loadAppearanceSettings();
+            hideAppLoader(80);
+        }
+        setTimeout(() => hideAppLoader(220), hadOfflineContacts ? 900 : 1800);
+
+        // Фоновая инициализация: не блокируем интерфейс из-за сети.
+        (async () => {
+            try {
+                await ensureAuthTokenForCurrentUser();
+            } catch {}
+            try {
+                await getMyPersistentKeys();
+            } catch {}
+            try {
+                await syncMyContacts();
+            } catch {}
+            scheduleOfflinePreload();
+            try {
+                await processInviteJoinFromLink();
+            } catch {}
+            try {
+                await loadStoriesFeed();
+            } catch {}
+            loadAppearanceSettings();
+            clearSearchMode();
+            if (!hadOfflineContacts) hideAppLoader(150);
+        })().catch((e) => {
+            console.error('main init failed:', e);
+            clearSearchMode();
+            if (!hadOfflineContacts) hideAppLoader(160);
+        });
     } else {
         hideAppLoader(180);
     }
