@@ -591,6 +591,10 @@ async function initAllPreviews() {
             if (!history || history.length === 0) continue;
 
             const packet = history[history.length - 1];
+            if (packet && typeof packet.native_plain_text === 'string' && packet.native_plain_text.trim()) {
+                updateMsgPreview(packet.from, packet.native_plain_text, chatId);
+                continue;
+            }
             
             // Получаем ключ
             let aesKey = sessionAESKeys[c.username];
@@ -2961,6 +2965,20 @@ async function decryptAndAppend(packet) {
     if (packet.type === "call_event" || packet.type === "system_event") {
         const text = stripSystemPrefix(packet.text || "📞 Событие звонка");
         addMessageToScreen("system", text, packet.id, null, packet.time, false, true);
+        return;
+    }
+    if (packet && typeof packet.native_plain_text === "string" && packet.native_plain_text.trim()) {
+        addMessageToScreen(
+            packet.from,
+            packet.native_plain_text,
+            packet.id,
+            packet.reply_to,
+            packet.time,
+            packet.edited,
+            false,
+            { forwardedFrom: packet.forwarded_from || '', reactions: packet.reactions || {} }
+        );
+        scrollChatToBottom();
         return;
     }
     if (!packet.cipher) return;

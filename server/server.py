@@ -2156,6 +2156,10 @@ def handle_disconnect():
 def online_status():
     return jsonify(list(_online_users.keys()))
 
+@app.route("/healthz")
+def healthz():
+    return jsonify({"ok": True, "ts": int(time.time())})
+
 @app.route("/api/storage_status")
 def storage_status():
     backend = "none"
@@ -2202,7 +2206,19 @@ def storage_probe():
 
 @socketio.on("send_message")
 def handle_message(packet):
-    from flask import request as req
+    result = _process_outgoing_message(dict(packet or {}))
+    if not result.get("ok"):
+        emit("message_ack", {
+            "id": result.get("id"),
+            "client_id": (packet or {}).get("client_id"),
+            "status": result.get("status", "error")
+        })
+        return
+    out_packet = result.get("packet", {})
+    emit("message_ack", {"id": out_packet.get("id"), "client_id": out_packet.get("client_id"), "status": "delivered"})
+
+def _process_outgoing_message(packet):
+    packet = dict(packet or {})
     packet["id"]     = f"msg_{int(time.time() * 1000)}"
     packet["time"]   = time.strftime("%H:%M")
     packet["edited"] = False
@@ -2211,38 +2227,30 @@ def handle_message(packet):
     sender = str(packet.get("from", "")).lower()
     target = packet.get("to", "")
     if not sender or not target:
-        return
+        return {"ok": False, "status": "bad_request", "id": packet.get("id")}
     msgs   = load_json(MESSAGES_FILE)
     if target.startswith("group_"):
         chat_id = target
         ginfo = _normalize_group_permissions((load_json(GROUPS_FILE) or {}).get(chat_id, {}))
         if not ginfo or sender not in [m.lower() for m in ginfo.get("members", [])]:
-            emit("message_ack", {"id": packet["id"], "client_id": packet.get("client_id"), "status": "forbidden"})
-            return
+            return {"ok": False, "status": "forbidden", "id": packet.get("id")}
         msg_type = str(packet.get("type", "text")).strip().lower()
         media_kind = str(packet.get("media_kind", "")).strip().lower()
         if msg_type in ("text", "") and not _group_member_permission(ginfo, sender, "can_send_messages"):
-            emit("message_ack", {"id": packet["id"], "client_id": packet.get("client_id"), "status": "forbidden"})
-            return
+            return {"ok": False, "status": "forbidden", "id": packet.get("id")}
         if msg_type == "text" and bool(packet.get("has_link", False)) and not _group_member_permission(ginfo, sender, "can_send_links"):
-            emit("message_ack", {"id": packet["id"], "client_id": packet.get("client_id"), "status": "forbidden"})
-            return
+            return {"ok": False, "status": "forbidden", "id": packet.get("id")}
         if msg_type == "sticker" and not _group_member_permission(ginfo, sender, "can_send_stickers"):
-            emit("message_ack", {"id": packet["id"], "client_id": packet.get("client_id"), "status": "forbidden"})
-            return
+            return {"ok": False, "status": "forbidden", "id": packet.get("id")}
         if msg_type == "gif" and not _group_member_permission(ginfo, sender, "can_send_gifs"):
-            emit("message_ack", {"id": packet["id"], "client_id": packet.get("client_id"), "status": "forbidden"})
-            return
+            return {"ok": False, "status": "forbidden", "id": packet.get("id")}
         if msg_type == "file":
             if not _group_member_permission(ginfo, sender, "can_send_media"):
-                emit("message_ack", {"id": packet["id"], "client_id": packet.get("client_id"), "status": "forbidden"})
-                return
+                return {"ok": False, "status": "forbidden", "id": packet.get("id")}
             if media_kind in ("voice", "audio", "voice_note") and not _group_member_permission(ginfo, sender, "can_send_voice"):
-                emit("message_ack", {"id": packet["id"], "client_id": packet.get("client_id"), "status": "forbidden"})
-                return
+                return {"ok": False, "status": "forbidden", "id": packet.get("id")}
             if media_kind in ("video_note", "circle") and not _group_member_permission(ginfo, sender, "can_send_video_notes"):
-                emit("message_ack", {"id": packet["id"], "client_id": packet.get("client_id"), "status": "forbidden"})
-                return
+                return {"ok": False, "status": "forbidden", "id": packet.get("id")}
         msgs.setdefault(chat_id, []).append(packet)
         save_json(MESSAGES_FILE, msgs)
         # Рассылаем только участникам группы
@@ -2266,8 +2274,31 @@ def handle_message(packet):
                 if sid not in sent_sids:
                     socketio.emit("new_message", packet, to=sid)
                     sent_sids.add(sid)
-    # Подтверждение отправителю — его pending можно убрать
-    emit("message_ack", {"id": packet["id"], "client_id": packet.get("client_id"), "status": "delivered"})
+    return {"ok": True, "status": "delivered", "packet": packet}
+
+@app.route("/api/native_send_message", methods=["POST"])
+def native_send_message():
+    data = request.json or {}
+    sender = str(data.get("from", "")).strip().lower()
+    target = str(data.get("to", "")).strip().lower()
+    text = str(data.get("text", "")).strip()
+    if not sender or not target or not text:
+        return jsonify({"error": "bad_request"}), 400
+    packet = {
+        "from": sender,
+        "to": target,
+        "type": "text",
+        "cipher": "",
+        "native_plain_text": text,
+        "client_id": str(data.get("client_id", "")).strip() or f"native_{int(time.time() * 1000)}",
+    }
+    result = _process_outgoing_message(packet)
+    if not result.get("ok"):
+        status = result.get("status", "error")
+        code = 403 if status == "forbidden" else 400
+        return jsonify({"error": status}), code
+    out_packet = result.get("packet", {})
+    return jsonify({"status": "ok", "id": out_packet.get("id"), "time": out_packet.get("time")})
 
 @socketio.on("toggle_reaction")
 def handle_toggle_reaction(data):
@@ -3469,7 +3500,6 @@ def story_view():
 
 
 if __name__ == "__main__":
-    import eventlet
     from datetime import datetime, timedelta
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
     logging.getLogger("werkzeug").disabled = True

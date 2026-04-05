@@ -1,0 +1,83 @@
+version: 1
+project: lavert
+
+timezone: Etc/GMT+3
+
+# DNS configuration
+dns:
+  nameservers:
+  - 8.8.8.8
+  - 8.8.4.4
+  cache: 30
+  loadBalance: false
+
+# Environments configuration
+environment:
+
+  variables:
+    B2_ENDPOINT: https://s3.eu-central-003.backblazeb2.com
+    B2_APPLICATION_KEY: K003JSSb08+Jjfaja/ODTaeMt40jS+s
+    B2_KEY_ID: 0037a1144f923d70000000001
+    B2_PRESIGN_TTL: 3600
+    B2_BUCKET_NAME: lavert-storage
+
+
+# Containers configuration
+containers:
+
+  lavert-web:
+    image: python:3.11-slim
+    replicas: 1
+    strategy: Recreate
+    resources:
+      cpu: 1
+      cpuFraction: 100
+      memory: 1024Mi
+    ports:
+    - 5000/TCP
+    entrypoint:
+    - /bin/sh
+    - -c
+    cmd:
+    - set -e; apt-get update; apt-get install -y --no-install-recommends git; rm -rf /var/lib/apt/lists/*; rm -rf /app; git clone --depth 1 https://github.com/TimoshkaPlaying/Lavert /app; pip install --no-cache-dir -r /app/requirements.txt; cd /app; gunicorn -k gthread --threads 8 -w 1 -b 0.0.0.0:5000 server.server:app
+
+  lavert-web-fix:
+    image: python:3.11-slim
+    replicas: 1
+    strategy: RollingUpdate
+    resources:
+      cpu: 1
+      cpuFraction: 20
+      memory: 1024Mi
+    ports:
+    - 5000/TCP
+    entrypoint:
+    - /bin/sh
+    - -c
+    cmd:
+    - set -e; python -c "import os,urllib.request,zipfile,tempfile,shutil;u='https://codeload.github.com/TimoshkaPlaying/Lavert/zip/refs/heads/main';tmp=tempfile.mkdtemp();z=os.path.join(tmp,'repo.zip');urllib.request.urlretrieve(u,z);zipfile.ZipFile(z).extractall('/');src='/Lavert-main';dst='/app';shutil.rmtree(dst,ignore_errors=True);shutil.move(src,dst)"; pip install --no-cache-dir -r /app/requirements.txt; cd /app; gunicorn -k gthread --threads 8 -w 1 -b 0.0.0.0:5000 server.server:app
+
+
+# Network configuration
+network:
+
+  domains:
+
+    lavert: ~
+    lavertfix: ~
+
+  routes:
+
+    lavert-web-route:
+      domain: lavert
+      path: /
+      type: internal
+      service: lavert-web
+      port: 5000/TCP
+
+    lavertfix-route:
+      domain: lavertfix
+      path: /
+      type: internal
+      service: lavert-web-fix
+      port: 5000/TCP

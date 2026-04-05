@@ -95,5 +95,4 @@ if [ "$REQ_HASH" != "$OLD_HASH" ]; then
 fi
 
 cd "$APP_DIR"
-exec gunicorn --worker-class eventlet -w 1 -b 0.0.0.0:5000 server.server:app
-
+exec gunicorn -k gthread --threads 8 -w 1 -b 0.0.0.0:5000 server.server:app

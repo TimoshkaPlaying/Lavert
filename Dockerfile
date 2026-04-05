@@ -20,5 +20,4 @@ RUN chmod +x /app/scripts/dockhost_boot.sh
 
 EXPOSE 5000
 
-CMD ["gunicorn", "--worker-class", "eventlet", "-w", "1", "-b", "0.0.0.0:5000", "server.server:app"]
-
+CMD ["gunicorn", "-k", "gthread", "--threads", "8", "-w", "1", "-b", "0.0.0.0:5000", "server.server:app"]
