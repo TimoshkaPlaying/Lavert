@@ -4,13 +4,23 @@ services:
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn --worker-class eventlet -w 1 -b 0.0.0.0:$PORT server.server:app
+    startCommand: gunicorn -k gthread --threads 8 -w 1 -b 0.0.0.0:$PORT server.server:app
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.11
       - key: STATE_SYNC_TO_OBJECT_STORAGE
         value: "1"
       - key: STATE_SYNC_STRICT
+        value: "0"
+      - key: STATE_SYNC_BLOCKING
+        value: "0"
+      - key: STATE_STORAGE_SUBPROCESS
         value: "1"
+      - key: SOCKETIO_ASYNC_MODE
+        value: "threading"
+      - key: SEARCH_CTX_TTL_SEC
+        value: "8"
+      - key: STATE_CACHE_TTL_SEC
+        value: "2.0"
       - key: STORAGE_FALLBACK_LOCAL
         value: "0"

@@ -1959,6 +1959,10 @@ window.addFriend = async (friendName) => {
     }
 };
 
+let _searchRequestSeq = 0;
+let _searchAbortCtrl = null;
+let _searchRetryTimer = null;
+
 window.search = async () => {
     const input = document.getElementById("searchUser");
     const results = document.getElementById("search-results");
@@ -1990,18 +1994,50 @@ window.search = async () => {
     };
 
     if (!query) {
+        if (_searchAbortCtrl) {
+            try { _searchAbortCtrl.abort(); } catch {}
+            _searchAbortCtrl = null;
+        }
+        if (_searchRetryTimer) {
+            clearTimeout(_searchRetryTimer);
+            _searchRetryTimer = null;
+        }
         results.innerHTML = "";
         clearMobileSearchOverlay();
         clearSearchMode();
         return;
     }
     activateSearchMode();
+    if (isPhone) applyMobileSearchOverlay();
+
+    const reqSeq = ++_searchRequestSeq;
+    if (_searchAbortCtrl) {
+        try { _searchAbortCtrl.abort(); } catch {}
+    }
+    _searchAbortCtrl = new AbortController();
+    const loadingNodeId = 'search-loading-hint';
+    let loadingNode = document.getElementById(loadingNodeId);
+    if (!loadingNode) {
+        loadingNode = document.createElement('div');
+        loadingNode.id = loadingNodeId;
+        loadingNode.style.padding = '10px 14px';
+        loadingNode.style.color = 'var(--text-dim)';
+        loadingNode.style.fontSize = '13px';
+        loadingNode.textContent = 'Поиск...';
+    }
+    if (!results.children.length) {
+        results.appendChild(loadingNode);
+    }
 
     try {
-        const res = await fetch(`/search?q=${encodeURIComponent(query)}&me=${username}`);
+        const tm = setTimeout(() => {
+            try { _searchAbortCtrl?.abort(); } catch {}
+        }, 25000);
+        const res = await fetch(`/search?q=${encodeURIComponent(query)}&me=${username}`, { signal: _searchAbortCtrl.signal });
+        clearTimeout(tm);
+        if (reqSeq !== _searchRequestSeq) return;
         const found = await res.json();
         results.innerHTML = "";
-        if (isPhone) applyMobileSearchOverlay();
 
         if (found.length === 0) {
             results.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--text-dim);">Ничего не найдено</div>';
@@ -2031,10 +2067,29 @@ window.search = async () => {
 
             others.forEach(item => renderSearchResult(item, results));
         }
+        if (_searchRetryTimer) {
+            clearTimeout(_searchRetryTimer);
+            _searchRetryTimer = null;
+        }
     } catch (e) {
+        if (reqSeq !== _searchRequestSeq) return;
         console.error("Ошибка поиска:", e);
-        clearMobileSearchOverlay();
-        clearSearchMode();
+        const errId = 'search-error-hint';
+        const oldErr = document.getElementById(errId);
+        if (oldErr) oldErr.remove();
+        const err = document.createElement('div');
+        err.id = errId;
+        err.style.padding = '10px 14px';
+        err.style.color = 'var(--danger, #ff6b6b)';
+        err.style.fontSize = '12px';
+        err.textContent = 'Слабое соединение. Продолжаем загрузку...';
+        results.appendChild(err);
+        if (_searchRetryTimer) clearTimeout(_searchRetryTimer);
+        _searchRetryTimer = setTimeout(() => {
+            if (String(input.value || '').trim() === query) {
+                window.search();
+            }
+        }, 1200);
     }
 };
 

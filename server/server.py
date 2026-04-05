@@ -19,7 +19,16 @@ except Exception:
     BotoConfig = None
 
 app = Flask(__name__, template_folder="../templates", static_folder="../static")
-socketio = SocketIO(app, cors_allowed_origins="*")
+SOCKETIO_ASYNC_MODE = os.getenv("SOCKETIO_ASYNC_MODE", "threading").strip() or "threading"
+socketio = SocketIO(
+    app,
+    cors_allowed_origins="*",
+    async_mode=SOCKETIO_ASYNC_MODE,
+    logger=False,
+    engineio_logger=False,
+    ping_interval=25,
+    ping_timeout=20,
+)
 app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024 * 1024  # 2GB
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 CRYPTO_DIR = os.path.join(BASE_DIR, "crypto")
@@ -176,6 +185,9 @@ _state_sync_dirty = set()
 _state_sync_latest = {}
 _state_sync_lock = threading.RLock()
 _state_sync_worker_started = False
+_search_ctx_cache = {}
+_search_ctx_lock = threading.RLock()
+SEARCH_CTX_TTL_SEC = float(os.getenv("SEARCH_CTX_TTL_SEC", "8.0") or "8.0")
 
 def _clone_json_data(data):
     try:
@@ -206,6 +218,42 @@ def _cache_put(path, data):
         return
     with _json_state_cache_lock:
         _json_state_cache[key] = {"ts": time.time(), "data": _clone_json_data(data)}
+
+def _extract_contacted_users_for_search(me, all_msgs):
+    contacted = set()
+    me_l = str(me or "").strip().lower()
+    if not me_l or not isinstance(all_msgs, dict):
+        return contacted
+    for chat_id in all_msgs.keys():
+        cid = str(chat_id or "")
+        low = cid.lower()
+        if cid.startswith("group_") or "_" not in cid or me_l not in low:
+            continue
+        a, b = cid.split("_", 1)
+        other = b if a.lower() == me_l else a
+        other = str(other or "").strip().lower()
+        if other:
+            contacted.add(other)
+    return contacted
+
+def _get_search_context(me, users, all_msgs):
+    now_ts = time.time()
+    me_l = str(me or "").strip().lower()
+    if not me_l:
+        return {"friends": set(), "contacted": set()}
+    with _search_ctx_lock:
+        cached = _search_ctx_cache.get(me_l)
+        if cached and now_ts - float(cached.get("ts", 0.0)) <= SEARCH_CTX_TTL_SEC:
+            return {
+                "friends": set(cached.get("friends", set())),
+                "contacted": set(cached.get("contacted", set())),
+            }
+    my_data = users.get(me_l, {}) if isinstance(users, dict) else {}
+    friends = {str(f).lower() for f in my_data.get("friends", [])}
+    contacted = _extract_contacted_users_for_search(me_l, all_msgs)
+    with _search_ctx_lock:
+        _search_ctx_cache[me_l] = {"ts": now_ts, "friends": friends, "contacted": contacted}
+    return {"friends": friends, "contacted": contacted}
 
 def _load_json_file(path):
     if not os.path.exists(path):
@@ -1595,18 +1643,13 @@ def search():
         return jsonify([])
 
     users    = load_json(USERS_FILE)
-    my_data  = users.get(me, {})
-    friends  = [f.lower() for f in my_data.get("friends", [])]
+    nicks    = load_json(NICKNAMES_FILE) or {}
     all_msgs = load_json(MESSAGES_FILE) or {}
     groups   = load_json(GROUPS_FILE) or {}
-
-    # С кем переписывались
-    contacted = set()
-    for chat_id in all_msgs:
-        if not chat_id.startswith("group_") and me in chat_id.lower() and "_" in chat_id:
-            parts = chat_id.split("_")
-            other = parts[1] if parts[0].lower() == me else parts[0]
-            contacted.add(other.lower())
+    ctx = _get_search_context(me, users, all_msgs)
+    friends = ctx["friends"]
+    contacted = ctx["contacted"]
+    my_nicks = nicks.get(me, {}) if isinstance(nicks, dict) else {}
 
     def user_to_item(u, is_friend, has_chatted):
         ud = users.get(u, {})
@@ -1615,8 +1658,7 @@ def search():
         display = f"{first} {last}".strip() or u
         
         # Учитываем кастомное имя которое me поставил этому пользователю
-        nicks = load_json(NICKNAMES_FILE)
-        custom_name = nicks.get(me, {}).get(u.lower(), "")
+        custom_name = my_nicks.get(u.lower(), "")
         if custom_name:
             display = custom_name
         
@@ -1642,14 +1684,13 @@ def search():
                 results.append(user_to_item(u, u in friends, u in contacted))
     else:
         # Поиск среди знакомых
-        nicks = load_json(NICKNAMES_FILE)
-        my_nicks = nicks.get(me, {})  # Мои кастомные имена
         seen = set()
         
         for u in users:
             if u == me: continue
-            is_friend   = u.lower() in friends
-            has_chatted = u.lower() in contacted
+            u_low = u.lower()
+            is_friend   = u_low in friends
+            has_chatted = u_low in contacted
             if not (is_friend or has_chatted):
                 continue
 
@@ -1657,8 +1698,8 @@ def search():
             first = ud.get("first_name", "").lower()
             last  = ud.get("last_name", "").lower()
             full  = f"{first} {last}".strip()
-            custom = my_nicks.get(u.lower(), "").lower()  # кастомное имя
-            uname  = u.lower()
+            custom = my_nicks.get(u_low, "").lower()  # кастомное имя
+            uname  = u_low
             
             if (query in uname or query in first or query in last 
                     or query in full or (custom and query in custom)):
@@ -2131,6 +2172,8 @@ def storage_status():
         "state_sync_strict": bool(STATE_SYNC_STRICT),
         "object_storage_primary": bool(STATE_SYNC_STRICT and _state_storage_enabled()),
         "state_storage_subprocess": bool(STATE_STORAGE_SUBPROCESS),
+        "socketio_async_mode": str(SOCKETIO_ASYNC_MODE),
+        "search_ctx_ttl_sec": float(SEARCH_CTX_TTL_SEC),
         "upload_fallback_local": bool(STORAGE_FALLBACK_LOCAL),
     })
 
